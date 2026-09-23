@@ -1,0 +1,110 @@
+name: mailops
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mailops-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mailops
+      POSTGRES_PASSWORD: mailops
+      POSTGRES_DB: mailops
+    ports:
+      # Published on host 5433, not 5432, because a locally installed PostgreSQL
+      # service commonly occupies 5432. Both listeners can bind successfully on
+      # Windows, but the native instance wins for localhost/127.0.0.1 traffic, so
+      # clients reach the wrong server and fail with "P1000: Authentication
+      # failed". Mapping to 5433 makes the container unambiguous.
+      # Keep this in sync with DATABASE_URL in backend/.env.
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mailops -d mailops"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: mailops-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # ---------------------------------------------------------------------------
+  # Application services. These are behind a compose profile so that local
+  # development (npm run dev) does not fight with the containers for ports.
+  #   docker compose --profile app up -d --build
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mailops-api
+    profiles: ["app"]
+    restart: unless-stopped
+    command: ["node", "dist/index.js"]
+    env_file:
+      - ./backend/.env
+    environment:
+      # Inside the compose network the container is reached on its native port.
+      DATABASE_URL: postgresql://mailops:mailops@postgres:5432/mailops?schema=public
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mailops-worker
+    profiles: ["app"]
+    restart: unless-stopped
+    command: ["node", "dist/workers/index.js"]
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql://mailops:mailops@postgres:5432/mailops?schema=public
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mailops-web
+    profiles: ["app"]
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  postgres-data:
+  redis-data:

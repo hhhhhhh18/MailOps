@@ -1,0 +1,732 @@
+// MailOps database schema.
+//
+// Design rules encoded here:
+//  1. Structured application history is INDEPENDENT of the original email. Emails
+//     can be deleted (from Gmail and from MailOps) while Application /
+//     ApplicationEvent rows survive. Email -> Application is an optional relation.
+//  2. Every automated mutation is traceable through AuditLog + ApplicationEvent.
+//  3. Gmail ingestion is idempotent: @@unique([userId, gmailMessageId]) plus a
+//     processingState machine on Email.
+//  4. Token material is stored encrypted at rest (envelope encryption handled in
+//     src/utils/crypto.ts). Only ciphertext ever reaches this table.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// Enums
+// -----------------------------------------------------------------------------
+
+enum EmailCategory {
+  JOB
+  PROMOTIONAL
+  SPAM
+  NEWSLETTER
+  SOCIAL
+  PERSONAL
+  TRANSACTIONAL
+  OTHER
+}
+
+enum JobSubCategory {
+  APPLICATION_RECEIVED
+  APPLICATION_ACKNOWLEDGED
+  SHORTLISTED
+  ASSESSMENT
+  INTERVIEW
+  NEXT_ROUND
+  FINAL_ROUND
+  RECRUITER_CONTACT
+  OFFER
+  OFFER_ACCEPTED
+  REJECTION
+  WITHDRAWN
+  JOB_ALERT
+  OTHER_JOB
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum EmailProcessingState {
+  PENDING
+  QUEUED
+  PROCESSING
+  PROCESSED
+  NEEDS_REVIEW
+  FAILED
+  SKIPPED
+}
+
+enum ApplicationStatus {
+  APPLIED
+  ACKNOWLEDGED
+  SHORTLISTED
+  ASSESSMENT
+  INTERVIEW
+  FINAL_ROUND
+  OFFER
+  ACCEPTED
+  REJECTED
+  WITHDRAWN
+  ON_HOLD
+  NO_RESPONSE
+}
+
+enum ApplicationEventType {
+  APPLICATION_CREATED
+  STATUS_CHANGED
+  EMAIL_LINKED
+  NOTE_ADDED
+  DEADLINE_SET
+  ACTION_REQUIRED
+  RECRUITER_CONTACT
+  INTERVIEW_SCHEDULED
+  ASSESSMENT_ASSIGNED
+  OFFER_ISSUED
+  REJECTION_RECEIVED
+  WITHDRAWN
+  DUPLICATE_FLAGGED
+  USER_OVERRIDE
+}
+
+enum EventActor {
+  AI
+  USER
+  SYSTEM
+}
+
+enum NotificationType {
+  JOB_IMPORTANT
+  JOB_STATUS_CHANGE
+  DEADLINE_APPROACHING
+  OFFER_RECEIVED
+  REJECTION_RECEIVED
+  RECRUITER_ACTION
+  CLEANUP_PROPOSAL
+  REVIEW_REQUIRED
+  SYNC_FAILURE
+  INTEGRATION_FAILURE
+  DIGEST
+}
+
+enum NotificationSeverity {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  ACKNOWLEDGED
+  ESCALATED
+  RESOLVED
+  FAILED
+  CANCELLED
+  SUPPRESSED
+}
+
+enum Channel {
+  DASHBOARD
+  SLACK
+  WHATSAPP
+  EMAIL
+  VOICE
+}
+
+enum AttemptStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+enum IntegrationKind {
+  SLACK
+  WHATSAPP
+  VOICE
+  EMAIL
+  AI
+}
+
+enum IntegrationStatus {
+  CONNECTED
+  DISCONNECTED
+  ERROR
+  PENDING
+}
+
+enum CleanupActionType {
+  DELETE
+  ARCHIVE
+  KEEP
+  IGNORE_SENDER
+  UNSUBSCRIBE
+}
+
+enum CleanupActionStatus {
+  PROPOSED
+  APPROVED
+  EXECUTED
+  FAILED
+  SKIPPED
+  REVERTED
+  BLOCKED
+}
+
+enum ScanType {
+  INITIAL
+  SCHEDULED
+  MANUAL
+}
+
+enum ScanStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  PARTIAL
+}
+
+enum AuditActor {
+  AI
+  SYSTEM
+  USER
+}
+
+enum GmailAccountStatus {
+  CONNECTED
+  EXPIRED
+  DISCONNECTED
+  ERROR
+}
+
+// -----------------------------------------------------------------------------
+// Identity
+// -----------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  passwordHash String?
+  timezone     String   @default("UTC")
+  avatarUrl    String?
+  isDemo       Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  lastLoginAt  DateTime?
+
+  settings          UserSettings?
+  gmailAccounts     GmailAccount[]
+  emails            Email[]
+  emailAnalyses     EmailAnalysis[]
+  applications      Application[]
+  applicationEvents ApplicationEvent[]
+  notifications     Notification[]
+  integrations      Integration[]
+  cleanupActions    CleanupAction[]
+  scanJobs          ScanJob[]
+  auditLogs         AuditLog[]
+  refreshTokens     RefreshToken[]
+
+  @@index([createdAt])
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  userAgent String?
+  ip        String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// -----------------------------------------------------------------------------
+// Settings
+// -----------------------------------------------------------------------------
+
+model UserSettings {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  // Scanning
+  scanIntervalMinutes Int      @default(210) // 3.5h, per product spec
+  scanningEnabled     Boolean  @default(true)
+
+  // Notification channels (Level 1..4)
+  notifyDashboard Boolean @default(true)
+  notifySlack     Boolean @default(false)
+  notifyWhatsapp  Boolean @default(false)
+  notifyEmail     Boolean @default(false)
+  notifyVoice     Boolean @default(false)
+
+  // Only notify at or above this severity (INFO..CRITICAL)
+  notifyMinSeverity NotificationSeverity @default(MEDIUM)
+
+  // Escalation: minutes to wait at each stage before escalating to the next channel.
+  // Index 0 = wait before Slack, 1 = before WhatsApp, 2 = before Voice.
+  escalationDelaysMinutes Int[]   @default([30, 60, 120])
+  escalationEnabled       Boolean @default(true)
+  escalationMaxStage      Int     @default(2) // 0=Slack, 1=WhatsApp, 2=Voice
+
+  // Voice (opt-in, off by default)
+  voiceEnabled       Boolean  @default(false)
+  voiceMaxCallsPerDay Int     @default(2)
+  voiceQuietHoursStart Int    @default(22) // local hour, inclusive
+  voiceQuietHoursEnd   Int    @default(7)  // local hour, exclusive
+  voiceCriticalEvents  String[] @default(["OFFER", "INTERVIEW", "ASSESSMENT", "RECRUITER_ACTION"])
+  voiceCallsToday      Int      @default(0)
+  voiceCallsResetAt    DateTime?
+
+  // Cleanup
+  autoCleanupEnabled  Boolean  @default(false)
+  cleanupCategories   String[] @default(["PROMOTIONAL", "SPAM", "NEWSLETTER"])
+  protectJobEmails    Boolean  @default(true)
+  protectPersonal     Boolean  @default(true)
+  protectFinancial    Boolean  @default(true)
+  protectGovernment   Boolean  @default(true)
+
+  // Privacy / retention
+  storeEmailBody      Boolean @default(true) // when false only snippet + metadata is kept
+  dataRetentionDays   Int     @default(365)
+  redactSensitiveLogs Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// -----------------------------------------------------------------------------
+// Gmail
+// -----------------------------------------------------------------------------
+
+model GmailAccount {
+  id     String @id @default(cuid())
+  userId String
+
+  emailAddress String
+  status       GmailAccountStatus @default(CONNECTED)
+
+  // Envelope-encrypted with AES-256-GCM before persisting. See utils/crypto.ts
+  accessTokenEnc  String?
+  refreshTokenEnc String?
+  tokenExpiresAt  DateTime?
+  grantedScopes   String[]
+
+  // Incremental sync cursor
+  historyId  String?
+  lastSyncAt DateTime?
+  lastError  String?
+  lastErrorAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emails Email[]
+  scanJobs ScanJob[]
+
+  @@unique([userId, emailAddress])
+  @@index([userId])
+  @@index([status])
+}
+
+// -----------------------------------------------------------------------------
+// Email intelligence
+// -----------------------------------------------------------------------------
+
+model Email {
+  id             String @id @default(cuid())
+  userId         String
+  gmailAccountId String
+
+  gmailMessageId String
+  gmailThreadId  String?
+
+  fromName    String?
+  fromEmail   String?
+  toEmail     String?
+  subject     String?
+  snippet     String?
+  // Minimised body: stored only when settings.storeEmailBody is true.
+  bodyText    String?
+  receivedAt  DateTime
+  labels      String[] @default([])
+  hasAttachments Boolean @default(false)
+  sizeEstimate   Int?
+  isImportant    Boolean @default(false) // Gmail's own importance flag
+  isUnread       Boolean @default(true)
+
+  processingState EmailProcessingState @default(PENDING)
+  processingError String?
+  attempts        Int      @default(0)
+  processedAt     DateTime?
+  needsReview     Boolean  @default(false)
+
+  // Deletion is a separate concern from keeping the structured record.
+  deletedFromGmail  Boolean   @default(false)
+  deletedFromMailops DateTime?
+
+  // Optional association: survives email deletion only if we null it out on delete.
+  applicationId String?
+
+  threadKey String? // normalised subject thread key for conversation grouping
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gmailAccount GmailAccount  @relation(fields: [gmailAccountId], references: [id], onDelete: Cascade)
+  application  Application?  @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  analysis     EmailAnalysis?
+  notifications Notification[]
+  cleanupActions CleanupAction[]
+  applicationEvents ApplicationEvent[]
+
+  @@unique([userId, gmailMessageId])
+  @@index([userId, receivedAt])
+  @@index([userId, processingState])
+  @@index([applicationId])
+  @@index([gmailThreadId])
+  @@index([createdAt])
+}
+
+model EmailAnalysis {
+  id      String @id @default(cuid())
+  emailId String @unique
+  userId  String
+
+  category    EmailCategory
+  subCategory JobSubCategory?
+  priority    Priority
+  confidence  Float // 0..1
+  requiresAction Boolean @default(false)
+  needsReview    Boolean @default(false)
+
+  // Short, user-facing explanation. Never chain-of-thought.
+  reasoning String?
+  summary   String?
+
+  // Validated, structured extraction result (see services/ai/schemas.ts).
+  extracted Json @default("{}")
+
+  // Cleanup hints for non-job mail
+  isUnwanted   Boolean @default(false)
+  unwantedReason String?
+
+  model         String
+  promptVersion String
+  provider      String
+  latencyMs     Int?
+  tokenUsage    Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  email Email @relation(fields: [emailId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, category])
+  @@index([userId, subCategory])
+  @@index([userId, needsReview])
+}
+
+// -----------------------------------------------------------------------------
+// Application intelligence
+// -----------------------------------------------------------------------------
+
+model Application {
+  id     String @id @default(cuid())
+  userId String
+
+  company          String
+  role             String
+  jobId            String?
+  applicationRefId String?
+  location         String?
+  employmentType   String?
+  salary           String?
+  source           String?
+  applicationUrl   String?
+  jobUrl           String?
+  recruiterName    String?
+  recruiterEmail   String?
+
+  appliedDate DateTime?
+  status      ApplicationStatus @default(APPLIED)
+  statusChangedAt DateTime  @default(now())
+  lastUpdated DateTime  @updatedAt
+  lastEmailAt DateTime?
+
+  // Normalised keys for matching / duplicate detection
+  companyKey String
+  roleKey    String
+
+  notes       String?
+  isDemo      Boolean @default(false)
+  needsReview Boolean @default(false)
+  confidence  Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events            ApplicationEvent[]
+  emails            Email[]
+  notifications     Notification[]
+  cleanupActions    CleanupAction[]
+
+  @@index([userId, status])
+  @@index([userId, companyKey])
+  @@index([userId, roleKey])
+  @@index([userId, jobId])
+  @@index([userId, lastUpdated])
+  @@index([createdAt])
+}
+
+model ApplicationEvent {
+  id            String @id @default(cuid())
+  applicationId String
+  userId        String
+
+  type      ApplicationEventType
+  actor     EventActor @default(AI)
+  title     String
+  description String?
+  fromStatus ApplicationStatus?
+  toStatus   ApplicationStatus?
+
+  occurredAt DateTime @default(now())
+  dueAt      DateTime?
+  emailId    String?
+  confidence Float?
+  isDemo     Boolean @default(false)
+  metadata   Json @default("{}")
+
+  createdAt DateTime @default(now())
+
+  application Application     @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email       Email?          @relation(fields: [emailId], references: [id], onDelete: SetNull)
+
+  @@index([applicationId, occurredAt])
+  @@index([userId, occurredAt])
+  @@index([userId, dueAt])
+  @@index([emailId])
+}
+
+// -----------------------------------------------------------------------------
+// Notifications & escalation
+// -----------------------------------------------------------------------------
+
+model Notification {
+  id     String @id @default(cuid())
+  userId String
+
+  applicationId String?
+  emailId       String?
+
+  type     NotificationType
+  severity NotificationSeverity
+  title    String
+  body     String?
+  actionUrl String?
+  actionLabel String?
+
+  // Acknowledgement-driven escalation
+  requiresAck      Boolean @default(false)
+  acknowledgedAt   DateTime?
+  acknowledgedVia  Channel?
+  status           NotificationStatus @default(PENDING)
+  escalationStage  Int @default(-1) // -1 = base (dashboard) notification
+  nextEscalationAt DateTime?
+  escalationPaused Boolean @default(false)
+  resolvedAt       DateTime?
+
+  // Idempotency: one notification per (user, dedupe key)
+  dedupeKey String
+
+  isDemo    Boolean @default(false)
+  metadata  Json @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  application Application?          @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  email       Email?                @relation(fields: [emailId], references: [id], onDelete: SetNull)
+  attempts    NotificationAttempt[]
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, createdAt])
+  @@index([userId, status])
+  @@index([nextEscalationAt])
+  @@index([applicationId])
+}
+
+model NotificationAttempt {
+  id             String @id @default(cuid())
+  notificationId String
+
+  channel Channel
+  status  AttemptStatus @default(PENDING)
+  stage   Int @default(0)
+  provider String?
+  providerMessageId String?
+  error   String?
+  attemptNo Int @default(1)
+  sentAt  DateTime?
+  createdAt DateTime @default(now())
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@index([notificationId, createdAt])
+  @@index([status])
+}
+
+// -----------------------------------------------------------------------------
+// Integrations
+// -----------------------------------------------------------------------------
+
+model Integration {
+  id     String @id @default(cuid())
+  userId String
+  kind   IntegrationKind
+
+  status IntegrationStatus @default(DISCONNECTED)
+  displayName String?
+  // Non-secret configuration only (channel ids, phone numbers, provider names...).
+  config Json @default("{}")
+  // Secrets (webhook URLs, API keys, auth tokens) envelope-encrypted.
+  secretsEnc String?
+
+  lastVerifiedAt DateTime?
+  lastError      String?
+  lastErrorAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, kind])
+  @@index([userId])
+}
+
+// -----------------------------------------------------------------------------
+// Cleanup
+// -----------------------------------------------------------------------------
+
+model CleanupAction {
+  id     String @id @default(cuid())
+  userId String
+
+  emailId       String?
+  applicationId String?
+
+  type   CleanupActionType
+  status CleanupActionStatus @default(PROPOSED)
+
+  reason    String?
+  category  EmailCategory?
+  batchId   String?
+  senderEmail String?
+
+  // Server-side guard result, recorded at approval time.
+  protectedReason String?
+
+  approvedAt DateTime?
+  executedAt DateTime?
+  error      String?
+  audit      Json @default("{}")
+
+  isDemo    Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email       Email?       @relation(fields: [emailId], references: [id], onDelete: SetNull)
+  application Application? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status])
+  @@index([userId, batchId])
+  @@index([emailId])
+}
+
+// -----------------------------------------------------------------------------
+// Scan jobs & audit
+// -----------------------------------------------------------------------------
+
+model ScanJob {
+  id             String @id @default(cuid())
+  userId         String
+  gmailAccountId String
+
+  type   ScanType
+  status ScanStatus @default(QUEUED)
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+  durationMs Int?
+
+  messagesScanned Int @default(0)
+  messagesNew     Int @default(0)
+  messagesQueued  Int @default(0)
+  messagesSkipped Int @default(0)
+
+  cursor  String?
+  error   String?
+  isDemo  Boolean @default(false)
+  triggeredBy String @default("scheduler")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gmailAccount GmailAccount @relation(fields: [gmailAccountId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([gmailAccountId, status])
+}
+
+model AuditLog {
+  id     String @id @default(cuid())
+  userId String
+
+  actor      AuditActor @default(SYSTEM)
+  action     String
+  entityType String?
+  entityId   String?
+  summary    String?
+  metadata   Json @default("{}")
+
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, action])
+}

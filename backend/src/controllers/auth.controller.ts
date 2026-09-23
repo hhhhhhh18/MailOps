@@ -1,0 +1,181 @@
+import type { Request, Response } from "express";
+import { z } from "zod";
+import {
+  ACCESS_COOKIE,
+  CSRF_COOKIE,
+  DEFAULT_PASSWORD_MIN_LENGTH,
+  REFRESH_COOKIE,
+  authCookieOptions,
+  loginUser,
+  refreshSession,
+  registerUser,
+  revokeAllSessions,
+  revokeRefreshToken,
+  toAuthenticatedUser,
+  type AuthResult,
+} from "../services/auth/auth.service";
+import { env } from "../config/env";
+import { prisma } from "../config/prisma";
+import { currentUserId } from "../middleware/auth";
+import { ensureCsrfCookie } from "../middleware/security";
+import { getOrCreateSettings } from "../services/settings/settings.service";
+import { ok } from "../utils/http";
+import { AUDIT_ACTIONS, recordAudit } from "../services/audit/audit.service";
+import { NotFoundError } from "../utils/errors";
+
+export const registerSchema = z.object({
+  email: z.string().trim().email().max(200),
+  password: z.string().min(DEFAULT_PASSWORD_MIN_LENGTH).max(200),
+  name: z.string().trim().min(1).max(120).optional(),
+  timezone: z.string().trim().max(64).optional(),
+});
+
+export const loginSchema = z.object({
+  email: z.string().trim().email().max(200),
+  password: z.string().min(1).max(200),
+});
+
+function sanitizeTimezone(value: string | undefined, fallback: string): string {
+  if (!value) return fallback;
+  try {
+    // Throws for an unknown IANA zone, which is exactly the check we want.
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return value;
+  } catch {
+    return fallback;
+  }
+}
+
+/** Sets the httpOnly access + refresh cookies on an auth success. */
+function applyAuthCookies(res: Response, result: AuthResult): void {
+  res.cookie(
+    ACCESS_COOKIE,
+    result.tokens.accessToken,
+    authCookieOptions(result.tokens.accessTokenExpiresAt.getTime() - Date.now()),
+  );
+  res.cookie(
+    REFRESH_COOKIE,
+    result.tokens.refreshToken,
+    authCookieOptions(result.tokens.refreshTokenExpiresAt.getTime() - Date.now()),
+  );
+}
+
+/**
+ * CSRF bootstrap.
+ *
+ * The double-submit token has to exist *before* the first state-changing request,
+ * but every endpoint that issues it in the auth flow is itself a POST — and
+ * `csrfMiddleware` rejects a POST that has no matching token. That is a deadlock:
+ * login can never satisfy the check that login itself needs.
+ *
+ * This endpoint breaks it without weakening anything:
+ *   - it is a GET, so it is exempt as a safe method by construction (there is no
+ *     exemption list to maintain and no route is skipped),
+ *   - it needs no session and reveals nothing: the response contains only a freshly
+ *     generated random token,
+ *   - the cookie it sets is readable by design (the client must echo it), exactly
+ *     as `ensureCsrfCookie` already did for signed-in users,
+ *   - it is idempotent: an existing token is returned unchanged, so calling it
+ *     again never invalidates the token a page is already using.
+ *
+ * Every state-changing endpoint still requires the cookie AND the matching
+ * X-CSRF-Token header.
+ */
+export async function csrf(req: Request, res: Response) {
+  return ok(res, { csrfToken: ensureCsrfCookie(req, res), cookieName: CSRF_COOKIE });
+}
+
+export async function register(req: Request, res: Response) {
+  const body = req.body as z.infer<typeof registerSchema>;
+  const timezone = sanitizeTimezone(body.timezone, "UTC");
+
+  const result = await registerUser({ ...body, timezone });
+  applyAuthCookies(res, result);
+
+  return ok(res, { user: result.user, csrfToken: ensureCsrfCookie(req, res) }, undefined, 201);
+}
+
+export async function login(req: Request, res: Response) {
+  const body = req.body as z.infer<typeof loginSchema>;
+  const result = await loginUser(body, {
+    ip: req.ip ?? null,
+    userAgent: req.headers["user-agent"] ?? null,
+  });
+
+  applyAuthCookies(res, result);
+  return ok(res, { user: result.user, csrfToken: ensureCsrfCookie(req, res) });
+}
+
+export async function refresh(req: Request, res: Response) {
+  const token = (req.cookies?.[REFRESH_COOKIE] as string | undefined) ?? (req.body?.refreshToken as string | undefined);
+  if (!token) {
+    res.clearCookie(ACCESS_COOKIE, authCookieOptions(0));
+    res.clearCookie(REFRESH_COOKIE, authCookieOptions(0));
+    return ok(res, { user: null, authenticated: false });
+  }
+
+  const result = await refreshSession(token, {
+    ip: req.ip ?? null,
+    userAgent: req.headers["user-agent"] ?? null,
+  });
+
+  applyAuthCookies(res, result);
+  return ok(res, { user: result.user, authenticated: true });
+}
+
+export async function logout(req: Request, res: Response) {
+  const token = req.cookies?.[REFRESH_COOKIE] as string | undefined;
+  if (token) await revokeRefreshToken(token);
+
+  if (req.auth?.userId) {
+    await recordAudit({
+      userId: req.auth.userId,
+      actor: "USER",
+      action: AUDIT_ACTIONS.userLogout,
+      entityType: "User",
+      entityId: req.auth.userId,
+      summary: "Signed out",
+    });
+  }
+
+  res.clearCookie(ACCESS_COOKIE, authCookieOptions(0));
+  res.clearCookie(REFRESH_COOKIE, authCookieOptions(0));
+  res.clearCookie(CSRF_COOKIE, authCookieOptions(0));
+
+  return ok(res, { signedOut: true });
+}
+
+/** Current session bootstrap: user + settings + csrf token in one round trip. */
+export async function me(req: Request, res: Response) {
+  const userId = currentUserId(req);
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, email: true, name: true, timezone: true, isDemo: true, createdAt: true, lastLoginAt: true },
+  });
+  if (!user) throw new NotFoundError("User");
+
+  const settings = await getOrCreateSettings(userId);
+  const gmailAccounts = await prisma.gmailAccount.findMany({
+    where: { userId },
+    select: { id: true, emailAddress: true, status: true, lastSyncAt: true, grantedScopes: true },
+  });
+
+  return ok(res, {
+    user: toAuthenticatedUser(user),
+    settings,
+    gmailAccounts,
+    csrfToken: ensureCsrfCookie(req, res),
+    defaults: {
+      gmailConfigured: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
+      aiProvider: env.AI_PROVIDER,
+    },
+  });
+}
+
+export async function revokeSessions(req: Request, res: Response) {
+  const userId = currentUserId(req);
+  const count = await revokeAllSessions(userId);
+  res.clearCookie(ACCESS_COOKIE, authCookieOptions(0));
+  res.clearCookie(REFRESH_COOKIE, authCookieOptions(0));
+  return ok(res, { revoked: count });
+}

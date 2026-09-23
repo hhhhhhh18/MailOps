@@ -1,0 +1,29 @@
+{
+  "name": "mailops",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MailOps - AI job-application operations agent",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "install:all": "npm install --workspace backend && npm install --workspace frontend",
+    "infra:up": "docker compose up -d postgres redis",
+    "infra:down": "docker compose down",
+    "db:generate": "npm run prisma:generate --workspace backend",
+    "db:migrate": "npm run prisma:migrate --workspace backend",
+    "db:deploy": "npm run prisma:deploy --workspace backend",
+    "db:seed": "npm run seed --workspace backend",
+    "db:studio": "npm run prisma:studio --workspace backend",
+    "dev:api": "npm run dev --workspace backend",
+    "dev:worker": "npm run dev:worker --workspace backend",
+    "dev:web": "npm run dev --workspace frontend",
+    "build": "npm run build --workspace backend && npm run build --workspace frontend",
+    "test": "npm run test --workspace backend",
+    "lint": "npm run lint --workspace backend && npm run lint --workspace frontend"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
