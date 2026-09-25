@@ -32,6 +32,16 @@ const envSchema = z.object({
    */
   PASSWORD_RESET_TTL_MINUTES: int(30),
 
+  /**
+   * Email-verification link lifetime, in minutes (default 24 hours).
+   *
+   * Longer than a password reset on purpose: verification is not a credential
+   * change, and a user may not open the link until the next day. It still expires,
+   * so an address that is later recycled by a mail provider cannot be verified
+   * with a stale link.
+   */
+  EMAIL_VERIFICATION_TTL_MINUTES: int(1440),
+
   DATABASE_URL: z.string().default("postgresql://mailops:mailops@localhost:5432/mailops?schema=public"),
   REDIS_URL: z.string().default("redis://localhost:6379"),
 

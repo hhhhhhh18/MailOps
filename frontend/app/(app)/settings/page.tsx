@@ -24,6 +24,7 @@ import { ConfirmDialog, useToast } from "@/components/ui/feedback";
 import {
   useChangePassword,
   useConnectGmail,
+  useMe,
   useDeleteEmailData,
   useDiagnostics,
   useDisconnectGmail,
@@ -35,6 +36,7 @@ import {
   useUpdateSettings,
   useUpsertIntegration,
 } from "@/lib/hooks";
+import { VerificationBanner, VerificationStatus } from "@/components/domain/verification";
 import { API_URL, ApiError } from "@/lib/api";
 import {
   PASSWORD_MIN_LENGTH,
@@ -1141,9 +1143,29 @@ function PasswordChangeForm() {
 function SecuritySection() {
   const toast = useToast();
   const { data: settings } = useSettings();
+  const { data: me } = useMe();
 
   return (
     <>
+      <Card title="Email verification" description="The address MailOps sends account email to">
+        {me?.user ? (
+          <div className="space-y-3">
+            <dl>
+              <VerificationStatus
+                email={me.user.email}
+                verified={me.user.emailVerified}
+                verifiedAt={me.user.emailVerifiedAt ? formatDate(me.user.emailVerifiedAt) : null}
+                verifiedLabel="Verified"
+                unverifiedLabel="Not verified"
+              />
+            </dl>
+            {!me.user.emailVerified && <VerificationBanner email={me.user.email} />}
+          </div>
+        ) : (
+          <Skeleton className="h-12 w-full" />
+        )}
+      </Card>
+
       <Card title="Password" description="Change the password used to sign in">
         <PasswordChangeForm />
       </Card>

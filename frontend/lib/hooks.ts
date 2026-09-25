@@ -63,6 +63,7 @@ export const queryKeys = {
   cleanup: (filters: object) => ["cleanup", filters] as const,
   cleanupSummary: ["cleanup", "summary"] as const,
   analytics: (weeks: number) => ["analytics", weeks] as const,
+  verifyEmail: (token: string) => ["auth", "verify-email", token] as const,
   settings: ["settings"] as const,
   audit: (filters: object) => ["settings", "audit", filters] as const,
   privacy: ["settings", "privacy"] as const,
@@ -126,6 +127,37 @@ export function useChangePassword() {
 export function useForgotPassword() {
   return useMutation({
     mutationFn: (body: { email: string }) => api.auth.forgotPassword(body),
+  });
+}
+
+/**
+ * Resend the verification email. On success the `/me` cache is refreshed so the
+ * banner reflects the server's view rather than local optimism.
+ */
+export function useResendVerification() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.auth.resendVerification(),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.me });
+    },
+  });
+}
+
+/**
+ * Verify an email-address token.
+ *
+ * Runs once and never retries: the token is single-use, so a retry after an
+ * ambiguous failure could only ever return the "already used" verdict, which the
+ * UI already reports as success.
+ */
+export function useVerifyEmail(token: string | null) {
+  return useQuery({
+    queryKey: queryKeys.verifyEmail(token ?? ""),
+    queryFn: () => api.auth.verifyEmail(token ?? ""),
+    enabled: Boolean(token),
+    retry: false,
+    staleTime: Infinity,
   });
 }
 

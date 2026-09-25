@@ -226,6 +226,11 @@ model User {
   timezone     String   @default("UTC")
   avatarUrl    String?
   isDemo       Boolean  @default(false)
+  /// Null until the user proves control of the address.
+  ///
+  /// A timestamp rather than a boolean: it answers "verified?" and "when?", which
+  /// support, re-verification policy and auditing all need, at the same storage cost.
+  emailVerifiedAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   lastLoginAt  DateTime?
@@ -243,6 +248,7 @@ model User {
   auditLogs         AuditLog[]
   refreshTokens     RefreshToken[]
   passwordResetTokens PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
 
   @@index([createdAt])
 }
@@ -277,6 +283,25 @@ model PasswordResetToken {
   usedAt        DateTime?
   requestedByIp String?
   createdAt     DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// Single-use email verification tokens.
+///
+/// Deliberately the same shape as PasswordResetToken: only the HMAC-SHA256 hash is
+/// persisted (so a database leak cannot be replayed), `usedAt` makes single use a
+/// property of the row, and the raw value exists only inside the emailed link.
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

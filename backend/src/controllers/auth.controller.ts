@@ -11,10 +11,12 @@ import {
   refreshSession,
   registerUser,
   requestPasswordReset as requestPasswordResetService,
+  resendVerification as resendVerificationService,
   resetPassword as resetPasswordService,
   revokeAllSessions,
   revokeRefreshToken,
   toAuthenticatedUser,
+  verifyEmail as verifyEmailService,
   type AuthResult,
 } from "../services/auth/auth.service";
 import { env } from "../config/env";
@@ -24,7 +26,7 @@ import { ensureCsrfCookie } from "../middleware/security";
 import { getOrCreateSettings } from "../services/settings/settings.service";
 import { ok } from "../utils/http";
 import { AUDIT_ACTIONS, recordAudit } from "../services/audit/audit.service";
-import { NotFoundError } from "../utils/errors";
+import { AppError, ERROR_CODES, NotFoundError } from "../utils/errors";
 
 export const registerSchema = z.object({
   email: z.string().trim().email().max(200),
@@ -92,7 +94,10 @@ export async function register(req: Request, res: Response) {
   const body = req.body as z.infer<typeof registerSchema>;
   const timezone = sanitizeTimezone(body.timezone, "UTC");
 
-  const result = await registerUser({ ...body, timezone });
+  const result = await registerUser(
+    { ...body, timezone },
+    { ip: req.ip ?? null, userAgent: req.headers["user-agent"] ?? null },
+  );
   applyAuthCookies(res, result);
 
   return ok(res, { user: result.user, csrfToken: ensureCsrfCookie(req, res) }, undefined, 201);
@@ -153,7 +158,16 @@ export async function me(req: Request, res: Response) {
   const userId = currentUserId(req);
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, email: true, name: true, timezone: true, isDemo: true, createdAt: true, lastLoginAt: true },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      timezone: true,
+      isDemo: true,
+      emailVerifiedAt: true,
+      createdAt: true,
+      lastLoginAt: true,
+    },
   });
   if (!user) throw new NotFoundError("User");
 
@@ -241,6 +255,63 @@ export async function forgotPassword(req: Request, res: Response) {
   });
 
   return ok(res, { message: result.message });
+}
+
+/** ------------------------------------------------------------------------ */
+/** Email verification                                                        */
+/** ------------------------------------------------------------------------ */
+
+export const verifyEmailQuerySchema = z.object({
+  token: z.string().trim().min(1).max(400),
+});
+
+/**
+ * Email verification landing endpoint.
+ *
+ * Public by necessity: the link is opened from an email, often on a different
+ * device or browser than the one that registered. The token *is* the credential,
+ * so no session is required — and the response returns only the verdict, never the
+ * token and never anything about the account.
+ */
+export async function verifyEmail(req: Request, res: Response) {
+  const query = req.query as z.infer<typeof verifyEmailQuerySchema>;
+
+  const { status } = await verifyEmailService({
+    token: query.token,
+    ip: req.ip ?? null,
+    userAgent: req.headers["user-agent"] ?? null,
+  });
+
+  if (status === "VERIFIED" || status === "ALREADY_VERIFIED") {
+    return ok(res, { status, emailVerified: true });
+  }
+
+  // `details.status` lets the result page distinguish expired from invalid without
+  // revealing anything about the token beyond the verdict.
+  throw new AppError(
+    status === "EXPIRED"
+      ? "This verification link has expired. Request a new one from Settings."
+      : "This verification link is not valid.",
+    { statusCode: 400, code: ERROR_CODES.VALIDATION_ERROR, details: { status } },
+  );
+}
+
+/**
+ * Resend the verification email.
+ *
+ * Authenticated, so there is no enumeration surface — the caller can only act on
+ * their own account. The message is still generic, and `emailVerified` reports the
+ * caller's own state so the UI can drop its banner without a refetch.
+ */
+export async function resendVerification(req: Request, res: Response) {
+  const userId = currentUserId(req);
+
+  const result = await resendVerificationService(userId, {
+    ip: req.ip ?? null,
+    userAgent: req.headers["user-agent"] ?? null,
+  });
+
+  return ok(res, { message: result.message, emailVerified: result.emailVerified, sent: result.sent });
 }
 
 /**

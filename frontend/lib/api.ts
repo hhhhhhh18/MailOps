@@ -1,6 +1,7 @@
 import type {
   AnalyticsOverview,
   ApplicationDetail,
+  EmailVerificationStatus,
   ApplicationListItem,
   ApplicationSummary,
   AuditLogRecord,
@@ -315,6 +316,16 @@ export const api = {
       request<{ reset: boolean; revokedSessions: number }>("/api/auth/reset-password", {
         method: "POST",
         body,
+      }),
+    /** Public: the link is opened from an email, often on another device. */
+    verifyEmail: (token: string) =>
+      request<{ status: EmailVerificationStatus; emailVerified: boolean }>("/api/auth/verify-email", {
+        query: { token },
+      }),
+    /** Authenticated. Generic message; `emailVerified` is the caller's own state. */
+    resendVerification: () =>
+      request<{ message: string; emailVerified: boolean; sent: boolean }>("/api/auth/resend-verification", {
+        method: "POST",
       }),
     login: (body: { email: string; password: string }) =>
       request<{ user: MeResponse["user"]; csrfToken: string }>("/api/auth/login", { method: "POST", body }),

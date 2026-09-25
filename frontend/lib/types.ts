@@ -87,7 +87,13 @@ export interface User {
   name: string | null;
   timezone: string;
   isDemo: boolean;
+  /** Login is not gated on this; it is surfaced so the UI can prompt the user. */
+  emailVerified: boolean;
+  emailVerifiedAt: string | null;
 }
+
+/** Verdict returned by the verification-link landing endpoint. */
+export type EmailVerificationStatus = "VERIFIED" | "ALREADY_VERIFIED" | "EXPIRED" | "INVALID";
 
 export interface GmailAccountSummary {
   id: string;

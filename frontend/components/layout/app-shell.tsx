@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { Button, Badge, Spinner } from "@/components/ui/primitives";
+import { VerificationBanner } from "@/components/domain/verification";
 import { useLogout, useMe, useNotificationCounts, useScanStatus, useTriggerScan } from "@/lib/hooks";
 import { cn, formatDuration, formatRelative } from "@/lib/utils";
 
@@ -148,7 +149,19 @@ export function AppShell({ children }: { children: ReactNode }) {
           gmailConnected={me.gmailAccounts.some((account) => account.status === "CONNECTED")}
         />
 
-        <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 pb-24 pt-5 lg:px-6 lg:pb-10">{children}</main>
+        <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 pb-24 pt-5 lg:px-6 lg:pb-10">
+          {/*
+            Unverified email is shown on every authenticated page rather than only
+            in Settings: verification gates nothing, so it would otherwise be easy
+            to ignore indefinitely.
+          */}
+          {me?.user && !me.user.emailVerified && (
+            <div className="mb-4">
+              <VerificationBanner email={me.user.email} />
+            </div>
+          )}
+          {children}
+        </main>
       </div>
 
       {/* ---------------- Mobile bottom nav ---------------- */}

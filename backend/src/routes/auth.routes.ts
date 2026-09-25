@@ -2,7 +2,7 @@ import { Router } from "express";
 import { asyncHandler } from "../utils/http";
 import { authRateLimit } from "../middleware/security";
 import { requireAuth, blockDemoWrites } from "../middleware/auth";
-import { validateBody } from "../middleware/validate";
+import { validate, validateBody } from "../middleware/validate";
 import {
   changePassword,
   changePasswordSchema,
@@ -16,9 +16,12 @@ import {
   refresh,
   register,
   registerSchema,
+  resendVerification,
   resetPassword,
   resetPasswordSchema,
   revokeSessions,
+  verifyEmail,
+  verifyEmailQuerySchema,
 } from "../controllers/auth.controller";
 
 /**
@@ -63,3 +66,22 @@ authRouter.post(
 );
 authRouter.post("/forgot-password", authRateLimit, validateBody(forgotPasswordSchema), asyncHandler(forgotPassword));
 authRouter.post("/reset-password", authRateLimit, validateBody(resetPasswordSchema), asyncHandler(resetPassword));
+
+/**
+ * Email verification.
+ *
+ * /verify-email is a GET opened from an email and must stay reachable without a
+ * session; it is CSRF-exempt as a safe method and returns only the verdict.
+ *
+ * /resend-verification requires a session (so there is no enumeration surface),
+ * honours the demo account's read-only contract, and carries the tighter rate
+ * limit because it sends mail.
+ */
+authRouter.get("/verify-email", validate({ query: verifyEmailQuerySchema }), asyncHandler(verifyEmail));
+authRouter.post(
+  "/resend-verification",
+  requireAuth,
+  blockDemoWrites,
+  authRateLimit,
+  asyncHandler(resendVerification),
+);

@@ -32,6 +32,9 @@ export interface AuthenticatedUser {
   name: string | null;
   timezone: string;
   isDemo: boolean;
+  /** Derived from `emailVerifiedAt`. Unverified users may still sign in (policy). */
+  emailVerified: boolean;
+  emailVerifiedAt: string | null;
 }
 
 export interface AuthResult {
@@ -56,12 +59,15 @@ export function assertPasswordPolicy(password: string): void {
   }
 }
 
-export async function registerUser(input: {
-  email: string;
-  password: string;
-  name?: string | null;
-  timezone?: string;
-}): Promise<AuthResult> {
+export async function registerUser(
+  input: {
+    email: string;
+    password: string;
+    name?: string | null;
+    timezone?: string;
+  },
+  context: { ip?: string | null; userAgent?: string | null } = {},
+): Promise<AuthResult> {
   const email = input.email.trim().toLowerCase();
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -107,6 +113,15 @@ export async function registerUser(input: {
     entityId: user.id,
     summary: "Account created",
   });
+
+  /**
+   * Verification email, best effort.
+   *
+   * The account is unusable-by-nobody until this succeeds, but registration must not
+   * fail because mail is down: the user can sign in and resend. The delivery
+   * outcome is recorded in the audit log by issueEmailVerification.
+   */
+  await issueEmailVerification(user, context);
 
   const tokens = await issueTokens(user, {});
   return { user: toAuthenticatedUser(user), tokens };
@@ -230,13 +245,17 @@ export async function getUserById(userId: string): Promise<(User & { settings: U
   return prisma.user.findUnique({ where: { id: userId }, include: { settings: true } });
 }
 
-export function toAuthenticatedUser(user: Pick<User, "id" | "email" | "name" | "timezone" | "isDemo">): AuthenticatedUser {
+export function toAuthenticatedUser(
+  user: Pick<User, "id" | "email" | "name" | "timezone" | "isDemo" | "emailVerifiedAt">,
+): AuthenticatedUser {
   return {
     id: user.id,
     email: user.email,
     name: user.name,
     timezone: user.timezone,
     isDemo: user.isDemo,
+    emailVerified: user.emailVerifiedAt !== null,
+    emailVerifiedAt: user.emailVerifiedAt ? user.emailVerifiedAt.toISOString() : null,
   };
 }
 
@@ -547,6 +566,207 @@ export async function resetPassword(input: {
   });
 
   return { revokedSessions: revoked.count };
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Email verification
+ * ---------------------------------------------------------------------------
+ *
+ * Same token discipline as password reset: 48 random bytes, stored only as an
+ * HMAC-SHA256 hash, single-use via `usedAt`, expiring. At most one live link per
+ * account, because a new request retires the previous one.
+ *
+ * Policy: an unverified address does NOT block sign-in. Verification gates
+ * nothing yet — it establishes that the user controls the address (needed for
+ * account recovery and for any future outbound mail), and the UI surfaces the
+ * state until it is resolved.
+ */
+
+export type EmailVerificationStatus = "VERIFIED" | "ALREADY_VERIFIED" | "EXPIRED" | "INVALID";
+
+export interface VerificationDelivery {
+  sent: boolean;
+  provider: string | null;
+  reason: string | null;
+}
+
+/** One response for every resend outcome, so the endpoint reveals nothing extra. */
+export const GENERIC_VERIFICATION_MESSAGE =
+  "If this account still needs verification, a new verification email has been sent.";
+
+async function deliverVerificationEmail(
+  to: string,
+  verifyUrl: string,
+  expiresAt: Date,
+): Promise<VerificationDelivery> {
+  const hours = Math.max(1, Math.round(env.EMAIL_VERIFICATION_TTL_MINUTES / 60));
+  const expires = expiresAt.toUTCString();
+
+  try {
+    const delivery = await sendTransactionalEmail({
+      to,
+      subject: "Verify your MailOps email address",
+      kind: "email-verification",
+      text: [
+        "Welcome to MailOps — the agent that turns your recruitment inbox into an organised application timeline.",
+        "",
+        "Confirm this email address to finish setting up your account:",
+        verifyUrl,
+        "",
+        `This link expires on ${expires} (about ${hours} hours) and can be used once.`,
+        "If you did not create a MailOps account, you can ignore this email.",
+      ].join("\n"),
+      html: [
+        "<p>Welcome to <strong>MailOps</strong> — the agent that turns your recruitment inbox into an organised application timeline.</p>",
+        "<p>Confirm this email address to finish setting up your account:</p>",
+        `<p><a href="${verifyUrl}">Verify my email address</a></p>`,
+        `<p>This link expires on ${expires} (about ${hours} hours) and can be used once.</p>`,
+        "<p>If you did not create a MailOps account, you can ignore this email.</p>",
+      ].join(""),
+    });
+
+    return {
+      sent: delivery.ok,
+      provider: delivery.provider,
+      reason: delivery.ok ? null : (delivery.error ?? "not delivered"),
+    };
+  } catch (error) {
+    logger.warn({ kind: "email-verification" }, "verification email threw");
+    return { sent: false, provider: null, reason: describeError(error).message };
+  }
+}
+
+/**
+ * Issues a fresh verification link, retiring any outstanding one.
+ *
+ * Never returns or records the raw token: it exists only in the email body.
+ */
+async function issueEmailVerification(
+  user: Pick<User, "id" | "email">,
+  context: { ip?: string | null; userAgent?: string | null } = {},
+): Promise<VerificationDelivery> {
+  await prisma.emailVerificationToken.updateMany({
+    where: { userId: user.id, usedAt: null },
+    data: { usedAt: new Date() },
+  });
+
+  const rawToken = randomToken(48);
+  const expiresAt = new Date(Date.now() + env.EMAIL_VERIFICATION_TTL_MINUTES * 60_000);
+
+  await prisma.emailVerificationToken.create({
+    data: { userId: user.id, tokenHash: hashToken(rawToken), expiresAt },
+  });
+
+  const verifyUrl = `${env.WEB_BASE_URL.replace(/\/$/, "")}/verify-email?token=${encodeURIComponent(rawToken)}`;
+  const outcome = await deliverVerificationEmail(user.email, verifyUrl, expiresAt);
+
+  await recordAudit({
+    userId: user.id,
+    actor: "SYSTEM",
+    action: AUDIT_ACTIONS.emailVerificationRequested,
+    entityType: "User",
+    entityId: user.id,
+    // No token, no hash, no URL — only the fact that a link was issued.
+    summary: "Email verification link issued",
+    metadata: {
+      delivered: outcome.sent,
+      provider: outcome.provider,
+      reason: outcome.reason,
+      expiresInMinutes: env.EMAIL_VERIFICATION_TTL_MINUTES,
+    },
+    ip: context.ip,
+    userAgent: context.userAgent,
+  });
+
+  return outcome;
+}
+
+export async function verifyEmail(input: {
+  token: string;
+  ip?: string | null;
+  userAgent?: string | null;
+}): Promise<{ status: EmailVerificationStatus }> {
+  const token = input.token.trim();
+  if (!token) return { status: "INVALID" };
+
+  const record = await prisma.emailVerificationToken.findUnique({
+    where: { tokenHash: hashToken(token) },
+    include: { user: { select: { id: true, emailVerifiedAt: true } } },
+  });
+
+  if (!record) {
+    // Unknown token: nothing to attribute, and the token must never be logged.
+    logger.warn({ ip: input.ip ?? null }, "email verification attempted with an unknown token");
+    return { status: "INVALID" };
+  }
+
+  /**
+   * Already used.
+   *
+   * If the account is verified, this is almost always the same user opening the
+   * link twice (or a mail client prefetching it), so report success rather than an
+   * error — the outcome the user wanted is true. If the account is *not* verified,
+   * the record and the user disagree, which should not silently verify anyone.
+   */
+  if (record.usedAt) {
+    return { status: record.user.emailVerifiedAt ? "ALREADY_VERIFIED" : "INVALID" };
+  }
+
+  if (record.expiresAt.getTime() <= Date.now()) {
+    await recordAudit({
+      userId: record.userId,
+      actor: "SYSTEM",
+      action: AUDIT_ACTIONS.emailVerificationRejected,
+      entityType: "EmailVerificationToken",
+      entityId: record.id,
+      summary: "Verification link expired",
+      ip: input.ip,
+      userAgent: input.userAgent,
+    });
+    return { status: "EXPIRED" };
+  }
+
+  await prisma.$transaction([
+    prisma.emailVerificationToken.update({ where: { id: record.id }, data: { usedAt: new Date() } }),
+    // Preserve the first verification time if it is somehow already set.
+    prisma.user.update({
+      where: { id: record.userId },
+      data: { emailVerifiedAt: record.user.emailVerifiedAt ?? new Date() },
+    }),
+  ]);
+
+  await recordAudit({
+    userId: record.userId,
+    actor: "USER",
+    action: AUDIT_ACTIONS.emailVerificationCompleted,
+    entityType: "User",
+    entityId: record.userId,
+    summary: "Email address verified",
+    metadata: { previouslyVerified: record.user.emailVerifiedAt !== null },
+    ip: input.ip,
+    userAgent: input.userAgent,
+  });
+
+  return { status: "VERIFIED" };
+}
+
+export async function resendVerification(
+  userId: string,
+  context: { ip?: string | null; userAgent?: string | null } = {},
+): Promise<{ message: string; emailVerified: boolean; sent: boolean }> {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) {
+    throw new UnauthenticatedError("Your session has expired. Please sign in again.");
+  }
+
+  // Already verified: the same generic message, and no new link is issued.
+  if (user.emailVerifiedAt) {
+    return { message: GENERIC_VERIFICATION_MESSAGE, emailVerified: true, sent: false };
+  }
+
+  const outcome = await issueEmailVerification(user, context);
+  return { message: GENERIC_VERIFICATION_MESSAGE, emailVerified: false, sent: outcome.sent };
 }
 
 /**
