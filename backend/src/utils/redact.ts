@@ -9,12 +9,23 @@ const BEARER = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
 const JWT_LIKE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g;
 const KEY_VALUE = /\b(access_token|refresh_token|api[_-]?key|client_secret|password)\b\s*[:=]\s*["']?([^\s"',;]{6,})["']?/gi;
 
+/**
+ * A one-time token carried in a URL query string or fragment — password reset and
+ * invitation links.
+ *
+ * Scoped deliberately to a URL delimiter before the key, so it cannot rewrite
+ * ordinary prose that happens to contain the word "token", while still catching
+ * the single most dangerous thing that could reach a log: a live reset URL.
+ */
+const URL_TOKEN = /([?&#](?:token|reset_token|resetToken|invite_token)=)[A-Za-z0-9._~+%/-]+/gi;
+
 /** Removes anything that looks like credential material from a free-text string. */
 export function redactSecrets(input: string): string {
   return input
     .replace(TOKEN_LIKE, "[REDACTED_TOKEN]")
     .replace(BEARER, "$1 [REDACTED]")
     .replace(JWT_LIKE, "[REDACTED_JWT]")
+    .replace(URL_TOKEN, "$1[REDACTED]")
     .replace(KEY_VALUE, (_m, key) => `${key}=[REDACTED]`);
 }
 

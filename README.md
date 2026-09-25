@@ -322,13 +322,20 @@ SEED_RESET=true npm run seed          # bash
 $env:SEED_RESET="true"; npm run seed  # PowerShell
 ```
 
-Demo credentials:
+Local development account:
 
 ```
-demo@mailops.local / MailOpsDemo123
+demo@mailops.local
 ```
 
-Override with `SEED_EMAIL` / `SEED_PASSWORD` if you prefer.
+The password is printed by the seed when it runs, or set it yourself with
+`SEED_PASSWORD`. Override the address with `SEED_EMAIL`.
+
+This account is **development-only**. The seed refuses to create it when
+`NODE_ENV=production`, or when the target database already holds real accounts and the
+environment is not explicitly `development`/`test`. A deliberate production seed also
+requires `SEED_ALLOW_PRODUCTION=true` *and* a non-default `SEED_PASSWORD`. The credentials
+are never displayed in the application UI.
 
 ---
 

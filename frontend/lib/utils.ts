@@ -14,6 +14,28 @@ export function cn(...inputs: ClassValue[]): string {
 }
 
 /** ------------------------------------------------------------------------ */
+/** Password policy (mirrors assertPasswordPolicy in the backend)            */
+/** ------------------------------------------------------------------------ */
+
+export const PASSWORD_MIN_LENGTH = 10;
+
+/**
+ * Client-side mirror of the server policy, for immediate feedback only.
+ *
+ * The server re-validates everything; this exists so the user is not told about a
+ * weak password after a round trip, never as the enforcement point.
+ */
+export function describePasswordProblem(password: string): string | null {
+  if (password.length < PASSWORD_MIN_LENGTH) {
+    return `Use at least ${PASSWORD_MIN_LENGTH} characters`;
+  }
+  if (!/[A-Za-z]/.test(password) || !/\d/.test(password)) {
+    return "Include at least one letter and one number";
+  }
+  return null;
+}
+
+/** ------------------------------------------------------------------------ */
 /** Formatting                                                                */
 /** ------------------------------------------------------------------------ */
 

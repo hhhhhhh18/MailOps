@@ -1,9 +1,25 @@
 import { Router } from "express";
 import { asyncHandler } from "../utils/http";
 import { authRateLimit } from "../middleware/security";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, blockDemoWrites } from "../middleware/auth";
 import { validateBody } from "../middleware/validate";
-import { csrf, login, loginSchema, logout, me, refresh, register, registerSchema, revokeSessions } from "../controllers/auth.controller";
+import {
+  changePassword,
+  changePasswordSchema,
+  csrf,
+  forgotPassword,
+  forgotPasswordSchema,
+  login,
+  loginSchema,
+  logout,
+  me,
+  refresh,
+  register,
+  registerSchema,
+  resetPassword,
+  resetPasswordSchema,
+  revokeSessions,
+} from "../controllers/auth.controller";
 
 /**
  * Authentication routes.
@@ -26,3 +42,24 @@ authRouter.post("/refresh", asyncHandler(refresh));
 authRouter.post("/logout", asyncHandler(logout));
 authRouter.get("/me", requireAuth, asyncHandler(me));
 authRouter.post("/sessions/revoke", requireAuth, asyncHandler(revokeSessions));
+
+/**
+ * Password lifecycle.
+ *
+ * /change-password requires a session (and honours the demo account's read-only
+ * contract, since changing the shared demo password would lock every visitor out).
+ *
+ * /forgot-password and /reset-password are public by necessity — the user has no
+ * session — so they carry the tighter rate limit, are CSRF-protected like every
+ * other POST, and return deliberately generic responses. Neither reveals whether
+ * an account exists, and the reset token is single-use and short-lived.
+ */
+authRouter.post(
+  "/change-password",
+  requireAuth,
+  blockDemoWrites,
+  validateBody(changePasswordSchema),
+  asyncHandler(changePassword),
+);
+authRouter.post("/forgot-password", authRateLimit, validateBody(forgotPasswordSchema), asyncHandler(forgotPassword));
+authRouter.post("/reset-password", authRateLimit, validateBody(resetPasswordSchema), asyncHandler(resetPassword));

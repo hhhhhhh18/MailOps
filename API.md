@@ -160,7 +160,7 @@ database is unreachable.
 ```bash
 curl -X POST http://localhost:4000/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"email":"demo@mailops.local","password":"MailOpsDemo123"}' \
+  -d '{"email":"you@example.com","password":"your-password"}' \
   -c cookies.txt
 ```
 

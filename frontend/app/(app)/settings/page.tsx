@@ -22,6 +22,7 @@ import { Badge, Button, Card, EmptyState, InlineAlert, Input, Select, Skeleton, 
 import { PageHeader } from "@/components/ui/data";
 import { ConfirmDialog, useToast } from "@/components/ui/feedback";
 import {
+  useChangePassword,
   useConnectGmail,
   useDeleteEmailData,
   useDiagnostics,
@@ -34,8 +35,15 @@ import {
   useUpdateSettings,
   useUpsertIntegration,
 } from "@/lib/hooks";
-import { API_URL } from "@/lib/api";
-import { formatDate, formatDuration, formatRelative, pluralize } from "@/lib/utils";
+import { API_URL, ApiError } from "@/lib/api";
+import {
+  PASSWORD_MIN_LENGTH,
+  describePasswordProblem,
+  formatDate,
+  formatDuration,
+  formatRelative,
+  pluralize,
+} from "@/lib/utils";
 import type { IntegrationStatus, UserSettings } from "@/lib/types";
 
 /**
@@ -1016,12 +1024,130 @@ function PrivacySection() {
 /** Security                                                                 */
 /** ------------------------------------------------------------------------ */
 
+/**
+ * Password change.
+ *
+ * Mirrors the server's policy for immediate feedback, but the server remains the
+ * enforcement point. Other devices are signed out by the API; this session is kept
+ * alive, and the success message says so rather than leaving it ambiguous.
+ */
+function PasswordChangeForm() {
+  const toast = useToast();
+  const changePassword = useChangePassword();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const policyProblem = newPassword ? describePasswordProblem(newPassword) : null;
+  const mismatch = confirm.length > 0 && confirm !== newPassword;
+
+  async function onSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    setError(null);
+
+    if (policyProblem) {
+      setError(policyProblem);
+      return;
+    }
+    if (newPassword !== confirm) {
+      setError("Both passwords must match");
+      return;
+    }
+
+    try {
+      const result = await changePassword.mutateAsync({ currentPassword, newPassword });
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirm("");
+      toast.success(
+        result.revokedSessions > 0
+          ? `Password updated. ${pluralize(result.revokedSessions, "other session")} signed out.`
+          : "Password updated.",
+      );
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : "Could not change your password. Please try again.",
+      );
+    }
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-3">
+      {error && (
+        <InlineAlert tone="critical" title="Could not change your password">
+          {error}
+        </InlineAlert>
+      )}
+
+      <label className="block">
+        <span className="text-xs font-medium text-secondary">Current password</span>
+        <Input
+          type="password"
+          name="current-password"
+          autoComplete="current-password"
+          required
+          className="mt-1.5"
+          value={currentPassword}
+          onChange={(event) => setCurrentPassword(event.target.value)}
+        />
+      </label>
+
+      <label className="block">
+        <span className="text-xs font-medium text-secondary">New password</span>
+        <Input
+          type="password"
+          name="new-password"
+          autoComplete="new-password"
+          required
+          className="mt-1.5"
+          value={newPassword}
+          onChange={(event) => setNewPassword(event.target.value)}
+        />
+        <span className="mt-1 block text-2xs text-muted">
+          At least {PASSWORD_MIN_LENGTH} characters, including a letter and a number.
+        </span>
+      </label>
+
+      <label className="block">
+        <span className="text-xs font-medium text-secondary">Confirm new password</span>
+        <Input
+          type="password"
+          name="confirm-password"
+          autoComplete="new-password"
+          required
+          className="mt-1.5"
+          value={confirm}
+          onChange={(event) => setConfirm(event.target.value)}
+        />
+        {mismatch && (
+          <span className="mt-1 block text-2xs text-[color:var(--tone-critical)]">Passwords do not match.</span>
+        )}
+      </label>
+
+      <Button
+        type="submit"
+        variant="primary"
+        size="sm"
+        loading={changePassword.isPending}
+        disabled={!currentPassword || !newPassword || !confirm || Boolean(policyProblem) || mismatch}
+      >
+        Update password
+      </Button>
+    </form>
+  );
+}
+
 function SecuritySection() {
   const toast = useToast();
   const { data: settings } = useSettings();
 
   return (
     <>
+      <Card title="Password" description="Change the password used to sign in">
+        <PasswordChangeForm />
+      </Card>
+
       <Card title="Session" description="How MailOps keeps you signed in">
         <ul className="space-y-2 text-xs text-secondary">
           <li>Short-lived access tokens are delivered in httpOnly cookies that JavaScript cannot read.</li>

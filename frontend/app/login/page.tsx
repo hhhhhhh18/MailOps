@@ -2,7 +2,8 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Bot, Github, ShieldCheck, Sparkles, Zap } from "lucide-react";
+import Link from "next/link";
+import { Bot, ShieldCheck, Sparkles, Zap } from "lucide-react";
 import { Button, Card, InlineAlert, Input, Skeleton } from "@/components/ui/primitives";
 import { useLogin, useMe, useRegister } from "@/lib/hooks";
 import { ApiError } from "@/lib/api";
@@ -166,6 +167,17 @@ function LoginScreen() {
                 hint={mode === "register" ? "Minimum 10 characters, including at least one letter and one number." : undefined}
               />
 
+              {mode === "login" && (
+                <div className="flex justify-end">
+                  <Link
+                    href="/forgot-password"
+                    className="text-xs font-medium text-[color:var(--tone-accent)] hover:underline"
+                  >
+                    Forgot password?
+                  </Link>
+                </div>
+              )}
+
               {formError && (
                 <InlineAlert tone={formError.degraded ? "waiting" : "critical"} title={formError.message}>
                   {formError.retryable && <span className="text-muted">This looks temporary — try again in a moment.</span>}
@@ -193,16 +205,6 @@ function LoginScreen() {
             </div>
           </Card>
 
-          <div className="mt-6 rounded-card border border-[color:var(--surface-border)] bg-[color:var(--surface-layer)] p-3 text-2xs text-muted">
-            <p className="flex items-center gap-1.5 font-medium text-secondary">
-              <Github className="h-3 w-3" /> Demo access
-            </p>
-            <p className="mt-1">
-              If you seeded the demo data, sign in with <span className="font-mono text-[color:var(--content-primary)]">demo@mailops.local</span> /{" "}
-              <span className="font-mono text-[color:var(--content-primary)]">MailOpsDemo123</span> to explore MailOps with a
-              realistic job search already in place.
-            </p>
-          </div>
         </div>
       </section>
     </div>

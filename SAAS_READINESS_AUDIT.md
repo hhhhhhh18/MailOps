@@ -86,12 +86,19 @@ Grep for `forgot|resetPassword` → no matches. A user who forgets their passwor
 permanently locked out with no recovery path, and a signed-in user cannot rotate a
 compromised password.
 
-### P0-3 · The login page publishes working demo credentials, and the seed has no production guard
-`frontend/app/login/page.tsx` renders `demo@mailops.local` / `MailOpsDemo123`
-literally in the UI. `prisma/seed.ts` contains **no** `NODE_ENV` check, so running it
-against production creates a known-credential account. Mitigating factor: `blockDemoWrites`
-does make the demo user read-only on write routes — but the credentials are still public
-and the account still authenticates.
+### P0-3 · The login page published working demo credentials, and the seed had no production guard — **REMEDIATED**
+*Originally:* `frontend/app/login/page.tsx` rendered the seeded account's email and
+password literally in the UI, and `prisma/seed.ts` had **no** environment check, so
+running it against production created a known-credential account.
+
+*Fixed:* the login page no longer displays any account credentials, the seeded password
+was removed from the documentation, and `prisma/seed.ts` now refuses to run unless it is
+safe to do so (see `assertSeedIsSafe()`): it exits when `NODE_ENV=production`, when the
+target database already holds non-demo accounts and the environment is not explicitly
+`development`/`test`, or when a deliberate production seed is attempted with the default
+password. A production seed additionally requires `SEED_ALLOW_PRODUCTION=true` plus a
+non-default `SEED_PASSWORD`. `blockDemoWrites` continues to keep the demo user read-only
+on write routes.
 
 ### P0-4 · No email verification
 Any address can be registered, and nothing proves the user controls it. Combined with
@@ -202,7 +209,7 @@ unverified. During this session the dashboard was verified only at the HTTP boun
 Ordered by risk-of-harm and by dependency (later items need earlier ones):
 
 1. **P0-3** Remove published demo credentials; gate the seed on `NODE_ENV`.
-   *Smallest change, highest immediate exposure.*
+   *Smallest change, highest immediate exposure.* — **DONE**
 2. **P0-2 + P1-3** Password change, then password reset — requires the transactional
    email provider, which also unblocks verification.
 3. **P0-1** Account deletion (with grace period, Gmail revocation, cascade, audit).

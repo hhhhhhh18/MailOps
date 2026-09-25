@@ -113,6 +113,34 @@ export function useLogout() {
   });
 }
 
+/**
+ * Password change. Other sessions are revoked server-side; this session stays
+ * signed in, so the local cache is left intact.
+ */
+export function useChangePassword() {
+  return useMutation({
+    mutationFn: (body: { currentPassword: string; newPassword: string }) => api.auth.changePassword(body),
+  });
+}
+
+export function useForgotPassword() {
+  return useMutation({
+    mutationFn: (body: { email: string }) => api.auth.forgotPassword(body),
+  });
+}
+
+/**
+ * Password reset. The server revokes every session, so the cache is cleared to
+ * avoid rendering authenticated data after the redirect to sign-in.
+ */
+export function useResetPassword() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { token: string; newPassword: string }) => api.auth.resetPassword(body),
+    onSuccess: () => queryClient.clear(),
+  });
+}
+
 /** ------------------------------------------------------------------------ */
 /** Dashboard                                                                 */
 /** ------------------------------------------------------------------------ */

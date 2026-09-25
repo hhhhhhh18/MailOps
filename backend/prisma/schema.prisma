@@ -242,6 +242,7 @@ model User {
   scanJobs          ScanJob[]
   auditLogs         AuditLog[]
   refreshTokens     RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
 
   @@index([createdAt])
 }
@@ -255,6 +256,27 @@ model RefreshToken {
   expiresAt DateTime
   revokedAt DateTime?
   createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// Single-use password reset tokens.
+///
+/// Mirrors RefreshToken deliberately: only the HMAC-SHA256 hash of the token is
+/// persisted, so a database leak cannot be replayed against /reset-password, and
+/// `usedAt` makes single-use enforcement a property of the row rather than of
+/// application memory. Only the minimum is stored — no email copy, no reset URL.
+model PasswordResetToken {
+  id            String    @id @default(cuid())
+  userId        String
+  tokenHash     String    @unique
+  expiresAt     DateTime
+  usedAt        DateTime?
+  requestedByIp String?
+  createdAt     DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

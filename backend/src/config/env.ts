@@ -23,6 +23,15 @@ const envSchema = z.object({
   API_BASE_URL: z.string().default("http://localhost:4000"),
   WEB_BASE_URL: z.string().default("http://localhost:3000"),
 
+  /**
+   * Password-reset link lifetime, in minutes.
+   *
+   * Deliberately short: a reset link is a bearer credential delivered over email,
+   * so the window in which a leaked inbox item is useful is kept small (default
+   * 30 minutes). Configurable per deployment, never per request.
+   */
+  PASSWORD_RESET_TTL_MINUTES: int(30),
+
   DATABASE_URL: z.string().default("postgresql://mailops:mailops@localhost:5432/mailops?schema=public"),
   REDIS_URL: z.string().default("redis://localhost:6379"),
 

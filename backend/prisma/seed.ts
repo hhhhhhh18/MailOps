@@ -35,8 +35,12 @@ dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 const prisma = new PrismaClient();
 
-const DEMO_EMAIL = process.env.SEED_EMAIL ?? "demo@mailops.local";
-const DEMO_PASSWORD = process.env.SEED_PASSWORD ?? "MailOpsDemo123";
+const DEFAULT_DEMO_EMAIL = "demo@mailops.local";
+/** Published default. Must never reach a deployed database — see assertSeedIsSafe(). */
+const DEFAULT_DEMO_PASSWORD = "MailOpsDemo123";
+
+const DEMO_EMAIL = process.env.SEED_EMAIL ?? DEFAULT_DEMO_EMAIL;
+const DEMO_PASSWORD = process.env.SEED_PASSWORD ?? DEFAULT_DEMO_PASSWORD;
 const RESET = process.env.SEED_RESET === "true";
 
 /** Deterministic PRNG so repeated seeds produce the same dashboard. */
@@ -349,7 +353,65 @@ async function resetDemoData(userId: string): Promise<void> {
   ]);
 }
 
+/**
+ * Production safety guard.
+ *
+ * The demo account's password is a published default, so creating it against a
+ * deployed database would mint a working, publicly known login. Three independent
+ * refusals, checked before anything is written:
+ *
+ *   1. NODE_ENV=production, unless SEED_ALLOW_PRODUCTION=true is set deliberately.
+ *   2. That production opt-in combined with the still-default password — a strong,
+ *      non-default SEED_PASSWORD is required before a deployed database is touched.
+ *   3. NODE_ENV is neither development nor test AND the database already holds
+ *      non-demo accounts. This is the realistic accident: seeding a live database
+ *      with NODE_ENV unset. Local development is unaffected because this project's
+ *      backend/.env sets NODE_ENV=development and tests run with NODE_ENV=test.
+ *
+ * This only prevents the demo account from existing; it does not weaken any
+ * authentication path.
+ */
+async function assertSeedIsSafe(): Promise<void> {
+  const nodeEnv = process.env.NODE_ENV ?? "";
+  const allowProduction = process.env.SEED_ALLOW_PRODUCTION === "true";
+  const explicitlyDevelopment = nodeEnv === "development" || nodeEnv === "test";
+
+  const refuse = (lines: string[]): never => {
+    console.error(`\n✗ Refusing to seed the demo account.\n\n  ${lines.join("\n  ")}\n`);
+    process.exit(1);
+  };
+
+  if (nodeEnv === "production" && !allowProduction) {
+    refuse([
+      "NODE_ENV=production.",
+      "The seed creates an account whose password is a published default.",
+      "To seed a deployed database deliberately, re-run with SEED_ALLOW_PRODUCTION=true",
+      "and a non-default SEED_PASSWORD. Preferably create a real account through the UI.",
+    ]);
+  }
+
+  if (allowProduction && DEMO_PASSWORD === DEFAULT_DEMO_PASSWORD) {
+    refuse([
+      "SEED_ALLOW_PRODUCTION=true but SEED_PASSWORD is still the published default.",
+      "Set SEED_PASSWORD to a strong, unique value before seeding a deployed database.",
+    ]);
+  }
+
+  if (!explicitlyDevelopment && !allowProduction) {
+    const existingAccounts = await prisma.user.count({ where: { isDemo: false } });
+    if (existingAccounts > 0) {
+      refuse([
+        `This database already holds ${existingAccounts} non-demo account(s), and NODE_ENV is`,
+        `"${nodeEnv || "(unset)"}" — it does not look like a local development database.`,
+        "Set NODE_ENV=development if you do mean to seed this database, or",
+        "SEED_ALLOW_PRODUCTION=true with a strong SEED_PASSWORD for a deliberate production seed.",
+      ]);
+    }
+  }
+}
+
 async function main(): Promise<void> {
+  await assertSeedIsSafe();
   console.log("Seeding MailOps demo data…");
 
   const passwordHash = await bcrypt.hash(DEMO_PASSWORD, 10);
@@ -945,7 +1007,12 @@ async function main(): Promise<void> {
   };
 
   console.log("\n✓ Seed complete. All rows are flagged isDemo = true.");
-  console.log(`  Demo login:  ${DEMO_EMAIL} / ${DEMO_PASSWORD}`);
+  if (process.env.NODE_ENV === "production") {
+    // Never echo a credential into production logs.
+    console.log(`  Demo login:  ${DEMO_EMAIL} (password supplied via SEED_PASSWORD)`);
+  } else {
+    console.log(`  Demo login:  ${DEMO_EMAIL} / ${DEMO_PASSWORD}`);
+  }
   console.log(`  Applications:       ${counts.applications}`);
   console.log(`  Emails:             ${counts.emails}`);
   console.log(`  AI analyses:        ${counts.analyses}`);

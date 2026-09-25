@@ -300,6 +300,22 @@ export const api = {
      */
     csrf: () => request<{ csrfToken: string; cookieName: string }>("/api/auth/csrf"),
     me: () => request<MeResponse>("/api/auth/me", { json: true }),
+    changePassword: (body: { currentPassword: string; newPassword: string }) =>
+      request<{ changed: boolean; revokedSessions: number }>("/api/auth/change-password", {
+        method: "POST",
+        body,
+      }),
+    /**
+     * Always resolves with the same generic message: the response carries no
+     * signal about whether the address matched an account.
+     */
+    forgotPassword: (body: { email: string }) =>
+      request<{ message: string }>("/api/auth/forgot-password", { method: "POST", body }),
+    resetPassword: (body: { token: string; newPassword: string }) =>
+      request<{ reset: boolean; revokedSessions: number }>("/api/auth/reset-password", {
+        method: "POST",
+        body,
+      }),
     login: (body: { email: string; password: string }) =>
       request<{ user: MeResponse["user"]; csrfToken: string }>("/api/auth/login", { method: "POST", body }),
     register: (body: { email: string; password: string; name?: string; timezone?: string }) =>

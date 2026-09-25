@@ -6,9 +6,12 @@ import {
   DEFAULT_PASSWORD_MIN_LENGTH,
   REFRESH_COOKIE,
   authCookieOptions,
+  changePassword as changePasswordService,
   loginUser,
   refreshSession,
   registerUser,
+  requestPasswordReset as requestPasswordResetService,
+  resetPassword as resetPasswordService,
   revokeAllSessions,
   revokeRefreshToken,
   toAuthenticatedUser,
@@ -178,4 +181,86 @@ export async function revokeSessions(req: Request, res: Response) {
   res.clearCookie(ACCESS_COOKIE, authCookieOptions(0));
   res.clearCookie(REFRESH_COOKIE, authCookieOptions(0));
   return ok(res, { revoked: count });
+}
+
+/** ------------------------------------------------------------------------ */
+/** Password lifecycle                                                        */
+/** ------------------------------------------------------------------------ */
+
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(200),
+  newPassword: z.string().min(DEFAULT_PASSWORD_MIN_LENGTH).max(200),
+});
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().trim().email().max(200),
+});
+
+export const resetPasswordSchema = z.object({
+  token: z.string().trim().min(1).max(400),
+  newPassword: z.string().min(DEFAULT_PASSWORD_MIN_LENGTH).max(200),
+});
+
+/**
+ * Authenticated password change.
+ *
+ * The refresh token of the calling session is passed through so the service can
+ * keep this session alive while revoking every other one.
+ */
+export async function changePassword(req: Request, res: Response) {
+  const userId = currentUserId(req);
+  const body = req.body as z.infer<typeof changePasswordSchema>;
+
+  const result = await changePasswordService(
+    userId,
+    {
+      currentPassword: body.currentPassword,
+      newPassword: body.newPassword,
+      keepRefreshToken: (req.cookies?.[REFRESH_COOKIE] as string | undefined) ?? null,
+    },
+    { ip: req.ip ?? null, userAgent: req.headers["user-agent"] ?? null },
+  );
+
+  return ok(res, { changed: true, revokedSessions: result.revokedSessions });
+}
+
+/**
+ * Password reset request.
+ *
+ * Returns the service's single generic message regardless of whether the address
+ * exists, whether the account is the demo account, or whether delivery succeeded.
+ * The delivery outcome is recorded in the audit log only.
+ */
+export async function forgotPassword(req: Request, res: Response) {
+  const body = req.body as z.infer<typeof forgotPasswordSchema>;
+
+  const result = await requestPasswordResetService({
+    email: body.email,
+    ip: req.ip ?? null,
+    userAgent: req.headers["user-agent"] ?? null,
+  });
+
+  return ok(res, { message: result.message });
+}
+
+/**
+ * Password reset completion.
+ *
+ * On success every session is already revoked by the service, so the caller's own
+ * cookies are cleared here to force a clean re-authentication.
+ */
+export async function resetPassword(req: Request, res: Response) {
+  const body = req.body as z.infer<typeof resetPasswordSchema>;
+
+  const result = await resetPasswordService({
+    token: body.token,
+    newPassword: body.newPassword,
+    ip: req.ip ?? null,
+    userAgent: req.headers["user-agent"] ?? null,
+  });
+
+  res.clearCookie(ACCESS_COOKIE, authCookieOptions(0));
+  res.clearCookie(REFRESH_COOKIE, authCookieOptions(0));
+
+  return ok(res, { reset: true, revokedSessions: result.revokedSessions });
 }
