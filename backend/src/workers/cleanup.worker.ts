@@ -6,6 +6,7 @@ import { redis } from "../config/redis";
 import { JOBS, QUEUES } from "../config/constants";
 import { prisma } from "../config/prisma";
 import { checkProtection, proposeCleanupForEmail, runRetentionSweep } from "../services/cleanup/cleanup.service";
+import { skippedForDeletedAccount, userStillExists } from "../services/account/worker-guard";
 import { describeError } from "../utils/errors";
 
 export interface CleanupJobData {
@@ -26,6 +27,22 @@ export function createCleanupWorker(): Worker {
   return new Worker(
     QUEUES.cleanup,
     async (job: Job<CleanupJobData>) => {
+      /**
+       * This is the most important guard of the four.
+       *
+       * Cleanup is the one worker whose work is a real-world side effect on the user's
+       * mailbox, and it is scheduled with delays — so a job armed before a deletion
+       * can fire afterwards. A missing account must mean "stop", not "proceed and let
+       * the database complain": the FK cannot protect an operation that talks to the
+       * Gmail API, and Gmail mutations are not undone by erasing our database.
+       *
+       * A job with no userId is a global sweep and is intentionally unaffected.
+       */
+      if (!(await userStillExists(job.data?.userId))) {
+        logger.info({ jobId: job.id, jobName: job.name }, "skipping cleanup work for a deleted account");
+        return skippedForDeletedAccount();
+      }
+
       if (job.name === JOBS.retentionSweep) {
         const result = await runRetentionSweep(job.data?.userId);
         logger.info(result, "retention sweep completed");

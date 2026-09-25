@@ -134,6 +134,8 @@ export const AUDIT_ACTIONS = {
   integrationUpdated: "integration.updated",
   dataPurged: "privacy.data_purged",
   retentionSweep: "privacy.retention_sweep",
+  accountDeleted: "user.account_deleted",
+  accountDeletionRejected: "user.account_deletion_rejected",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

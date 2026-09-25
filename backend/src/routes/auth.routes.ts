@@ -7,6 +7,8 @@ import {
   changePassword,
   changePasswordSchema,
   csrf,
+  deleteAccount,
+  deleteAccountSchema,
   forgotPassword,
   forgotPasswordSchema,
   login,
@@ -84,4 +86,26 @@ authRouter.post(
   blockDemoWrites,
   authRateLimit,
   asyncHandler(resendVerification),
+);
+
+/**
+ * Account deletion — irreversible, so it carries every guard at once.
+ *
+ * `authRateLimit` is placed BEFORE `requireAuth` on purpose. Two reasons: throttling
+ * unauthenticated traffic is strictly better than letting it reach the auth lookup,
+ * and it makes the limiter provably wired to this route (a limiter sitting after
+ * `requireAuth` is never reached by an unauthenticated request, which is exactly how
+ * the P0-4 rate-limit test ended up asserting the global limiter by mistake).
+ *
+ * CSRF is applied globally by `csrfMiddleware` like every other mutating route.
+ * `blockDemoWrites` keeps the shared demo account undeletable, and the service
+ * enforces it a second time so the guard cannot be lost by a routing change.
+ */
+authRouter.delete(
+  "/account",
+  authRateLimit,
+  requireAuth,
+  blockDemoWrites,
+  validateBody(deleteAccountSchema),
+  asyncHandler(deleteAccount),
 );

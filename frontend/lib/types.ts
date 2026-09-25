@@ -577,6 +577,41 @@ export interface AuditLogRecord {
   createdAt: string;
 }
 
+/** What MailOps can and cannot revoke externally when an account is deleted. */
+export interface DeletionRevocationGuidance {
+  id: string;
+  label: string;
+  /** True when MailOps revokes it automatically as part of the deletion. */
+  automatic: boolean;
+  detail: string;
+}
+
+/** Inventory shown before the user confirms an irreversible deletion. */
+export interface DeletionPreview {
+  counts: Record<string, number>;
+  totalRows: number;
+  gmailAccounts: Array<{ id: string; emailAddress: string; status: string }>;
+  revocation: DeletionRevocationGuidance[];
+  mailbox: string;
+}
+
+export interface AccountDeletionResult {
+  deleted: true;
+  receiptId: string;
+  countsByModel: Record<string, number>;
+  totalRowsDeleted: number;
+  sessionsRevoked: number;
+  gmail: { accounts: number; revoked: number; failures: string[]; fullyRevoked: boolean };
+  externalPurge: {
+    queuesRemoved: number;
+    queuesRemovedByQueue: Record<string, number>;
+    redisKeysRemoved: number;
+    failures: string[];
+  };
+  revocation: DeletionRevocationGuidance[];
+  mailbox: string;
+}
+
 export interface PrivacySummary {
   gmailAccounts: Array<{
     id: string;
@@ -598,6 +633,8 @@ export interface PrivacySummary {
   retention: { storeEmailBody: boolean; dataRetentionDays: number; oldestEmailAt: string | null };
   controls: Array<{ id: string; label: string; description: string; endpoint: string; method: string }>;
   aiProcessing: { provider: string; sendsEmailContent: boolean; retainsPromptData: boolean };
+  /** Counts for the Danger Zone inventory. Served by the same endpoint on purpose. */
+  deletionPreview: DeletionPreview;
 }
 
 export interface SettingsResponse {

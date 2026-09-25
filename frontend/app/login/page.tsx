@@ -37,6 +37,8 @@ function LoginScreen() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const returnTo = searchParams.get("returnTo") ?? "/dashboard";
+  /** Set by the Danger Zone after a successful account deletion. */
+  const justDeleted = searchParams.get("deleted") === "1";
 
   const { data: me } = useMe();
   const login = useLogin();
@@ -132,6 +134,17 @@ function LoginScreen() {
                 : "Your account is separate from Gmail — you will grant mailbox access in the next step."
             }
           >
+            {justDeleted && (
+              <div className="mb-4">
+                <InlineAlert tone="info" title="Your account has been deleted">
+                  Everything MailOps stored for that account has been erased, and you have been signed
+                  out. Any messages already delivered to Slack, WhatsApp, email or voice cannot be
+                  recalled, and any Google access that could not be revoked should be checked in your
+                  Google account permissions.
+                </InlineAlert>
+              </div>
+            )}
+
             <form onSubmit={submit} className="space-y-4">
               {mode === "register" && (
                 <Input

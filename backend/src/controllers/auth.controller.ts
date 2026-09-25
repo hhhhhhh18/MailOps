@@ -24,6 +24,7 @@ import { prisma } from "../config/prisma";
 import { currentUserId } from "../middleware/auth";
 import { ensureCsrfCookie } from "../middleware/security";
 import { getOrCreateSettings } from "../services/settings/settings.service";
+import { ObliterateUserAccountService } from "../services/account/deletion.service";
 import { ok } from "../utils/http";
 import { AUDIT_ACTIONS, recordAudit } from "../services/audit/audit.service";
 import { AppError, ERROR_CODES, NotFoundError } from "../utils/errors";
@@ -334,4 +335,54 @@ export async function resetPassword(req: Request, res: Response) {
   res.clearCookie(REFRESH_COOKIE, authCookieOptions(0));
 
   return ok(res, { reset: true, revokedSessions: result.revokedSessions });
+}
+
+/** ------------------------------------------------------------------------ */
+/** Account deletion                                                         */
+/** ------------------------------------------------------------------------ */
+
+/**
+ * `.strict()` is load-bearing, not cosmetic.
+ *
+ * The schema accepts exactly two fields, so a request that tries to smuggle a
+ * `userId` (or anything else) is rejected with 422 rather than being silently
+ * ignored. The account being deleted comes only from the authenticated session —
+ * there is no code path that reads a target id from the body.
+ */
+export const deleteAccountSchema = z
+  .object({
+    password: z.string().min(1).max(200),
+    confirmation: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+/**
+ * Delete the authenticated user's account and erase all stored data.
+ *
+ * The service performs password re-authentication and the email confirmation check
+ * itself, then revokes external grants, writes the de-identified receipt, deletes the
+ * user row (the database cascades the rest) and purges Redis. This handler is
+ * deliberately thin: orchestration ordering lives in one place, where it is testable.
+ *
+ * Session cleanup: `revokeAllSessions` runs inside the service while the rows still
+ * exist, and the cookies are cleared here. Outstanding access JWTs are already
+ * rejected by `requireAuth`'s database existence check, so nothing further is needed.
+ */
+export async function deleteAccount(req: Request, res: Response) {
+  const userId = currentUserId(req);
+  const body = req.body as z.infer<typeof deleteAccountSchema>;
+
+  const result = await ObliterateUserAccountService.obliterate(userId, {
+    actor: "USER",
+    // Never logged, never echoed into an audit row.
+    password: body.password,
+    confirmation: body.confirmation,
+    ip: req.ip ?? null,
+  });
+
+  res.clearCookie(ACCESS_COOKIE, authCookieOptions(0));
+  res.clearCookie(REFRESH_COOKIE, authCookieOptions(0));
+  res.clearCookie(CSRF_COOKIE, authCookieOptions(0));
+
+  return ok(res, result);
 }

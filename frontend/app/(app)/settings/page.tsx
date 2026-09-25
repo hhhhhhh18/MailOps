@@ -1,7 +1,8 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -20,10 +21,11 @@ import {
 } from "lucide-react";
 import { Badge, Button, Card, EmptyState, InlineAlert, Input, Select, Skeleton, Stat, Switch } from "@/components/ui/primitives";
 import { PageHeader } from "@/components/ui/data";
-import { ConfirmDialog, useToast } from "@/components/ui/feedback";
+import { ConfirmDialog, Modal, useToast } from "@/components/ui/feedback";
 import {
   useChangePassword,
   useConnectGmail,
+  useDeleteAccount,
   useMe,
   useDeleteEmailData,
   useDiagnostics,
@@ -46,7 +48,7 @@ import {
   formatRelative,
   pluralize,
 } from "@/lib/utils";
-import type { IntegrationStatus, UserSettings } from "@/lib/types";
+import type { DeletionPreview, IntegrationStatus, UserSettings } from "@/lib/types";
 
 /**
  * Settings (spec #26, #28, #34).
@@ -1014,11 +1016,237 @@ function PrivacySection() {
                   Recommended. Your application records are the point of MailOps and contain no email content of their own.
                 </span>
               </span>
-            </label>
-          </div>
+             </label>
+           </div>
+         }
+       />
+
+       <DangerZone preview={data.deletionPreview} />
+     </>
+   );
+ }
+
+/** ------------------------------------------------------------------------ */
+/** Danger zone: account deletion                                            */
+/** ------------------------------------------------------------------------ */
+
+/**
+ * Inventory labels, in the order they are worth reading.
+ *
+ * Keys are the model names the API returns, so a new user-owned model shows up as a
+ * missing row here rather than being silently omitted from the total.
+ */
+const DELETION_LABELS: Array<[string, string]> = [
+  ["emails", "Stored emails"],
+  ["emailAnalyses", "AI analyses"],
+  ["applications", "Applications"],
+  ["applicationEvents", "Application timeline events"],
+  ["notifications", "Notifications"],
+  ["notificationAttempts", "Notification delivery attempts"],
+  ["gmailAccounts", "Gmail connections"],
+  ["integrations", "Connected integrations"],
+  ["cleanupActions", "Cleanup records"],
+  ["scanJobs", "Scan history"],
+  ["refreshTokens", "Active sessions"],
+  ["passwordResetTokens", "Password reset tokens"],
+  ["emailVerificationTokens", "Email verification tokens"],
+  ["auditLogs", "Audit log entries"],
+  ["userSettings", "Settings"],
+  ["user", "Account"],
+];
+
+/**
+ * Irreversible account deletion.
+ *
+ * Three things here are load-bearing:
+ *  - the inventory is shown *before* confirmation, so consent is informed rather
+ *    than a click on a vague warning;
+ *  - the account email (typed exactly) AND the current password are both required,
+ *    and the destructive button stays disabled until both are valid — a live session
+ *    is not proof of intent;
+ *  - what MailOps cannot revoke is stated plainly. Only Gmail is revoked
+ *    automatically; everything else is a credential MailOps merely holds a copy of.
+ */
+function DangerZone({ preview }: { preview: DeletionPreview }) {
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const { data: me } = useMe();
+  const deleteAccount = useDeleteAccount();
+
+  const [open, setOpen] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const accountEmail = me?.user?.email ?? "";
+  const isDemo = me?.user?.isDemo ?? false;
+
+  const emailOk = accountEmail.length > 0 && email.trim().toLowerCase() === accountEmail.toLowerCase();
+  const canConfirm = emailOk && password.length > 0 && !deleteAccount.isPending;
+
+  function close() {
+    setOpen(false);
+    setEmail("");
+    setPassword("");
+    setError(null);
+  }
+
+  /** Clear everything local and leave — the account no longer exists server-side. */
+  function leaveAfterDeletion(message: string) {
+    queryClient.clear();
+    toast.success("Account deleted", message);
+    router.replace("/login?deleted=1");
+  }
+
+  async function onConfirm() {
+    setError(null);
+    try {
+      const result = await deleteAccount.mutateAsync({ password, confirmation: email });
+      leaveAfterDeletion(
+        `Erased ${result.totalRowsDeleted} record(s).` +
+          (result.gmail.accounts > 0 && !result.gmail.fullyRevoked
+            ? " Some Google access could not be revoked — see the notice on the sign-in page."
+            : ""),
+      );
+    } catch (caught) {
+      /**
+       * A 401/404 here means the account is already gone (a second click, or another
+       * tab won the race). The user's intent is satisfied, so treat it as success
+       * rather than showing a failure for a deletion that did happen.
+       */
+      if (caught instanceof ApiError && (caught.status === 401 || caught.status === 404)) {
+        leaveAfterDeletion("This account no longer exists.");
+        return;
+      }
+      setError(
+        caught instanceof ApiError
+          ? caught.message
+          : "Account deletion failed. Nothing was deleted.",
+      );
+    }
+  }
+
+  if (isDemo) {
+    return (
+      <Card title="Delete account" description="Permanently erase this account and everything stored for it">
+        <InlineAlert tone="waiting" title="Not available on the demo account">
+          The demo account is shared and read-only, so it cannot be deleted. Create your own account to
+          manage deletion.
+        </InlineAlert>
+      </Card>
+    );
+  }
+
+  return (
+    <Card title="Delete account" description="Permanently erase this account and everything stored for it">
+      <InlineAlert tone="critical" title="This cannot be undone">
+        Deleting your account erases every stored email, AI analysis, application, timeline event,
+        notification, connection and session MailOps holds for it. There is no recovery and no grace
+        period.
+      </InlineAlert>
+
+      <div className="mt-4">
+        <p className="text-2xs uppercase tracking-wide text-muted">
+          What will be deleted — {preview.totalRows} record{preview.totalRows === 1 ? "" : "s"}
+        </p>
+        <ul className="mt-2 grid gap-1.5 text-xs sm:grid-cols-2">
+          {DELETION_LABELS.map(([key, label]) => (
+            <li key={key} className="flex justify-between gap-3">
+              <span className="text-secondary">{label}</span>
+              <span className="font-mono text-2xs text-muted">{preview.counts[key] ?? 0}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="mt-4 rounded-lg bg-[color:var(--surface-overlay)] p-3">
+        <p className="text-2xs uppercase tracking-wide text-muted">What can and cannot be revoked</p>
+        <ul className="mt-2 space-y-2 text-xs">
+          {preview.revocation.map((item) => (
+            <li key={item.id} className="flex gap-2">
+              <span
+                className={
+                  item.automatic
+                    ? "mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--tone-success)]"
+                    : "mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--tone-warning)]"
+                }
+              />
+              <span>
+                <span className="font-medium text-[color:var(--content-primary)]">{item.label}</span>
+                <span className="ml-1.5 text-2xs uppercase tracking-wide text-muted">
+                  {item.automatic ? "revoked automatically" : "your action needed"}
+                </span>
+                <span className="mt-0.5 block text-muted">{item.detail}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="mt-4">
+        <Button variant="danger" onClick={() => setOpen(true)} icon={<Trash2 className="h-3.5 w-3.5" />}>
+          Delete my account
+        </Button>
+      </div>
+
+      <Modal
+        open={open}
+        onClose={close}
+        title="Delete your MailOps account?"
+        description="This erases all stored data immediately. It cannot be undone."
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={close} disabled={deleteAccount.isPending}>
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={onConfirm} loading={deleteAccount.isPending} disabled={!canConfirm}>
+              Delete permanently
+            </Button>
+          </>
         }
-      />
-    </>
+      >
+        <div className="space-y-3 text-xs text-secondary">
+          <p>
+            {preview.totalRows} record{preview.totalRows === 1 ? "" : "s"} will be erased, including{" "}
+            {preview.counts.emails ?? 0} stored email{preview.counts.emails === 1 ? "" : "s"}.
+            {preview.gmailAccounts.length > 0
+              ? ` MailOps will also revoke its Google access for ${preview.gmailAccounts.length} connected account${
+                  preview.gmailAccounts.length === 1 ? "" : "s"
+                }.`
+              : ""}
+          </p>
+
+          <Input
+            label="Type your account email to confirm"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            placeholder={accountEmail}
+            autoComplete="off"
+            hint={`Must match ${accountEmail} exactly.`}
+          />
+
+          <Input
+            label="Current password"
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            autoComplete="current-password"
+          />
+
+          {error && (
+            <InlineAlert tone="critical" title="Deletion failed">
+              {error} Nothing was deleted.
+            </InlineAlert>
+          )}
+
+          <p className="text-2xs text-muted">
+            Your actual Gmail messages are not affected — MailOps never deletes mail from your mailbox.
+          </p>
+        </div>
+      </Modal>
+    </Card>
   );
 }
 

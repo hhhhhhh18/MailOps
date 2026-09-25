@@ -1,4 +1,4 @@
-import { Queue, type JobsOptions } from "bullmq";
+import { Queue, type Job, type JobsOptions, type JobType } from "bullmq";
 import { DEFAULT_JOB_OPTIONS, JOBS, QUEUES } from "../config/constants";
 import { logger } from "../config/logger";
 import { redis } from "../config/redis";
@@ -185,11 +185,137 @@ export async function closeQueues(): Promise<void> {
   registry.clear();
 }
 
-/** Targeted cleanup for the "delete my MailOps data" flow. */
-export async function obliterateUserJobs(emailId: string): Promise<void> {
-  try {
-    await queues.emailProcessing.remove(`email:${emailId}`);
-  } catch {
-    // Job may already be gone; nothing to do.
+/** -------------------------------------------------------------------------- */
+/** Account deletion: purge everything user-identifiable outside PostgreSQL      */
+/** -------------------------------------------------------------------------- */
+
+/**
+ * Queues whose job payloads carry a `userId`, and therefore user-identifiable data.
+ *
+ * `notification` and `escalation` are deliberately absent: their payloads contain
+ * only an opaque notification id, and their workers already no-op when the
+ * underlying row is gone (see dispatcher.service.ts). There is nothing
+ * user-identifiable to purge, and enumerating them would risk touching a job that
+ * belongs to someone else.
+ */
+const PII_BEARING_QUEUES = [
+  QUEUES.emailScan,
+  QUEUES.emailProcessing,
+  QUEUES.applicationProcessing,
+  QUEUES.cleanup,
+] as const;
+
+/**
+ * States a job may be sitting in. `active` is included so a job that is stuck
+ * mid-flight is also removed rather than left to finish against a deleted account.
+ */
+const JOB_STATES: JobType[] = ["waiting", "delayed", "active", "failed", "completed", "paused", "wait"];
+
+export interface QueuePurgeResult {
+  /** Queue name → number of jobs removed. */
+  removedByQueue: Record<string, number>;
+  totalRemoved: number;
+  failures: string[];
+}
+
+/**
+ * Removes every job belonging to `userId` from the PII-bearing queues.
+ *
+ * Deliberately enumerates real job payloads instead of reconstructing job ids. The
+ * producers use several id shapes — `email:{id}`, `email:{id}:{timestamp}` for a
+ * forced reprocess, `scan:{account}:{type}` — and most cleanup jobs carry no
+ * explicit id at all, so an id-based approach silently misses jobs. That is exactly
+ * the flaw in the `obliterateUserJobs(emailId)` helper this replaces: it removed one
+ * id shape from one queue and left everything else behind.
+ *
+ * Completed and failed jobs are included on purpose: retained job bodies
+ * (`removeOnComplete`/`removeOnFail` keep the last N) would otherwise hold the
+ * userId and emailId in Redis indefinitely.
+ *
+ * Never touches a job whose payload belongs to another user.
+ */
+export async function purgeUserQueueData(userId: string): Promise<QueuePurgeResult> {
+  const removedByQueue: Record<string, number> = {};
+  const failures: string[] = [];
+  let totalRemoved = 0;
+
+  for (const queueName of PII_BEARING_QUEUES) {
+    let removed = 0;
+
+    let queue: Queue;
+    try {
+      queue = getQueue(queueName);
+    } catch (error) {
+      failures.push(`${queueName}: ${(error as Error).message}`);
+      removedByQueue[queueName] = 0;
+      continue;
+    }
+
+    for (const state of JOB_STATES) {
+      let jobs: (Job | undefined)[] = [];
+      try {
+        jobs = await queue.getJobs([state], 0, 1000, true);
+      } catch (error) {
+        failures.push(`${queueName}/${state}: ${(error as Error).message}`);
+        continue;
+      }
+
+      for (const job of jobs) {
+        if (!job) continue;
+        if ((job.data as { userId?: string } | undefined)?.userId !== userId) continue;
+
+        try {
+          await job.remove();
+          removed += 1;
+        } catch (error) {
+          // An active job holds a lock and may refuse removal. Not fatal: the
+          // worker-side existence guard stops it doing any work regardless.
+          failures.push(`${queueName}/${state}/${job.id}: ${(error as Error).message}`);
+        }
+      }
+    }
+
+    removedByQueue[queueName] = removed;
+    totalRemoved += removed;
   }
+
+  return { removedByQueue, totalRemoved, failures };
+}
+
+/**
+ * Deletes Redis keys that carry a userId *in the key name*.
+ *
+ * `voice:calls:{userId}:{date}` is the only such key today (escalation.service.ts).
+ * The date suffix is why a pattern is used rather than one computed key: a deletion
+ * can span midnight.
+ */
+export async function purgeUserRedisKeys(userId: string): Promise<{ removedKeys: number; failures: string[] }> {
+  const failures: string[] = [];
+  let removedKeys = 0;
+
+  try {
+    const keys = await redis.keys(`voice:calls:${userId}:*`);
+    if (keys.length) removedKeys = await redis.del(...keys);
+  } catch (error) {
+    failures.push(`voice-calls: ${(error as Error).message}`);
+  }
+
+  return { removedKeys, failures };
+}
+
+/**
+ * Everything user-identifiable that lives outside PostgreSQL, for one user.
+ *
+ * Best-effort and idempotent by design: it runs *after* the user row is already
+ * gone, so a partial failure is recorded on the deletion receipt and can be retried
+ * without the erasure itself being in any way affected.
+ */
+export async function purgeUserExternalData(userId: string): Promise<{
+  queues: QueuePurgeResult;
+  redisKeys: { removedKeys: number; failures: string[] };
+  failures: string[];
+}> {
+  const queues = await purgeUserQueueData(userId);
+  const redisKeys = await purgeUserRedisKeys(userId);
+  return { queues, redisKeys, failures: [...queues.failures, ...redisKeys.failures] };
 }

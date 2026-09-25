@@ -19,6 +19,7 @@ import type {
   NotificationRecord,
   PageMeta,
   PrivacySummary,
+  AccountDeletionResult,
   RejectedApplication,
   ScanJobRecord,
   ScanSchedule,
@@ -327,6 +328,15 @@ export const api = {
       request<{ message: string; emailVerified: boolean; sent: boolean }>("/api/auth/resend-verification", {
         method: "POST",
       }),
+    /**
+     * Irreversible account deletion.
+     *
+     * The target is implicit: the server deletes whichever account owns the session
+     * and rejects any extra body field, so this deliberately accepts no user
+     * identifier.
+     */
+    deleteAccount: (body: { password: string; confirmation: string }) =>
+      request<AccountDeletionResult>("/api/auth/account", { method: "DELETE", body }),
     login: (body: { email: string; password: string }) =>
       request<{ user: MeResponse["user"]; csrfToken: string }>("/api/auth/login", { method: "POST", body }),
     register: (body: { email: string; password: string; name?: string; timezone?: string }) =>

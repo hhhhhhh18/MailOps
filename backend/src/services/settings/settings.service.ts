@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../../config/prisma";
 import { AUDIT_ACTIONS, recordAudit } from "../audit/audit.service";
 import { ValidationError } from "../../utils/errors";
+import { previewAccountDeletion, type AccountDeletionPreview } from "../account/deletion.service";
 
 /**
  * User settings + privacy surface.
@@ -152,6 +153,14 @@ export interface PrivacySummary {
     sendsEmailContent: boolean;
     retainsPromptData: false;
   };
+  /**
+   * What account deletion would remove, plus what MailOps cannot reach.
+   *
+   * Exposed on this endpoint rather than a separate one: the privacy summary is
+   * already "what MailOps holds and how to get rid of it", so a second endpoint
+   * returning nearly the same counts would be duplication.
+   */
+  deletionPreview: AccountDeletionPreview;
 }
 
 /**
@@ -244,6 +253,7 @@ export async function getPrivacySummary(userId: string): Promise<PrivacySummary>
       sendsEmailContent: true,
       retainsPromptData: false,
     },
+    deletionPreview: await previewAccountDeletion(userId),
   };
 }
 

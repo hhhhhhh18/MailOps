@@ -5,6 +5,7 @@ import { redis } from "../config/redis";
 import { JOBS, QUEUES } from "../config/constants";
 import { analyzeEmail } from "../services/ai/analysis.service";
 import { enqueueApplicationUpdate } from "../queues";
+import { skippedForDeletedAccount, userStillExists } from "../services/account/worker-guard";
 import { describeError } from "../utils/errors";
 
 export interface ProcessEmailJobData {
@@ -25,6 +26,15 @@ export function createEmailProcessingWorker(): Worker {
     QUEUES.emailProcessing,
     async (job: Job<ProcessEmailJobData>) => {
       const { emailId, userId, force } = job.data;
+
+      // The account may have been erased after this job was queued. Analysing the
+      // email would spend AI quota on a deleted user and then try to write rows whose
+      // FK is gone, so stop before doing either.
+      if (!(await userStillExists(userId))) {
+        logger.info({ jobId: job.id, emailId }, "skipping email processing for a deleted account");
+        return skippedForDeletedAccount();
+      }
+
       const startedAt = Date.now();
 
       const outcome = await analyzeEmail(emailId, { force });

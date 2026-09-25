@@ -628,6 +628,18 @@ export function usePrivacySummary() {
   });
 }
 
+/**
+ * Delete the current account.
+ *
+ * No cache invalidation here on purpose: the account no longer exists, so there is
+ * nothing left to refetch. The caller clears the entire query cache and redirects.
+ */
+export function useDeleteAccount() {
+  return useMutation({
+    mutationFn: (body: { password: string; confirmation: string }) => api.auth.deleteAccount(body),
+  });
+}
+
 export function useDeleteEmailData() {
   const queryClient = useQueryClient();
   return useMutation({

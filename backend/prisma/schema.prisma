@@ -777,3 +777,48 @@ model AuditLog {
   @@index([userId, createdAt])
   @@index([userId, action])
 }
+
+// -----------------------------------------------------------------------------
+// Account deletion
+// -----------------------------------------------------------------------------
+
+enum DeletionInitiator {
+  USER
+  ADMIN
+}
+
+/// De-identified proof that an account erasure was performed.
+///
+/// Deliberately has NO foreign key to User — that is the entire design. Every
+/// AuditLog row is cascaded away with the user, so if this table referenced User it
+/// would be erased by the very operation it exists to record. It is the only row
+/// that survives an account deletion, and it answers "did MailOps actually erase
+/// this account, and what did it remove?" after the user is gone.
+///
+/// It therefore stores no direct identifier. The user id and the requesting IP are
+/// kept only as HMAC-SHA256 fingerprints: deterministic (so a support ticket or a
+/// repeated request can be matched) but not reversible, and meaningless without the
+/// server secret. No email address, no password, no token, no user agent, no body.
+model AccountDeletionRecord {
+  id                String            @id @default(cuid())
+  /// HMAC-SHA256 of the deleted User id. Not reversible; recomputable for matching.
+  deletedUserIdHash String
+  /// When the erasure was requested (set before the user row is removed).
+  requestedAt       DateTime
+  /// Null until the user row is confirmed gone, so a row never claims a completed
+  /// deletion that did not happen. A null here means "requested, not confirmed".
+  completedAt       DateTime?
+  initiator         DeletionInitiator @default(USER)
+  /// Per-model row counts removed, e.g. {"emails": 42, "applications": 7}.
+  countsByModel     Json              @default("{}")
+  /// True only when every connected Google grant was actually revoked.
+  gmailGrantRevoked Boolean           @default(false)
+  /// Non-secret failure notes, e.g. ["google-grant: invalid_grant"]. Null when clean.
+  revokeFailures    Json?
+  /// HMAC-SHA256 of the requesting IP, when one was available.
+  requestedByIpHash String?
+  createdAt         DateTime          @default(now())
+
+  @@index([requestedAt])
+  @@index([deletedUserIdHash])
+}

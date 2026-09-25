@@ -4,6 +4,7 @@ import { logger } from "../config/logger";
 import { redis } from "../config/redis";
 import { QUEUES } from "../config/constants";
 import { scanGmailAccount } from "../services/gmail/sync.service";
+import { skippedForDeletedAccount, userStillExists } from "../services/account/worker-guard";
 import { describeError, isAppError } from "../utils/errors";
 
 export interface ScanJobData {
@@ -25,6 +26,16 @@ export function createEmailScanWorker(): Worker {
   return new Worker(
     QUEUES.emailScan,
     async (job: Job<ScanJobData>) => {
+      /**
+       * The account may have been erased after this scan was queued. Scanning would
+       * read the mailbox and re-ingest messages for a user who no longer exists, so
+       * stop here rather than let the FK violation do it.
+       */
+      if (!(await userStillExists(job.data?.userId))) {
+        logger.info({ jobId: job.id }, "skipping scan for a deleted account");
+        return skippedForDeletedAccount();
+      }
+
       const startedAt = Date.now();
       const outcome = await scanGmailAccount(job.data);
       logger.info({ ...outcome, durationMs: Date.now() - startedAt }, "scan job completed");

@@ -4,6 +4,7 @@ import { logger } from "../config/logger";
 import { redis } from "../config/redis";
 import { QUEUES } from "../config/constants";
 import { processApplicationFromEmail } from "../services/applications/application-processing.service";
+import { skippedForDeletedAccount, userStillExists } from "../services/account/worker-guard";
 import { describeError } from "../utils/errors";
 
 export interface ApplicationJobData {
@@ -24,6 +25,17 @@ export function createApplicationProcessingWorker(): Worker {
   return new Worker(
     QUEUES.applicationProcessing,
     async (job: Job<ApplicationJobData>) => {
+      /**
+       * Never recreate an application for an erased account. This is the worker that
+       * owns the only code path creating or mutating Applications, so the guard here
+       * is what makes "deletion cannot be undone by a late job" true by construction
+       * rather than by FK timing.
+       */
+      if (!(await userStillExists(job.data?.userId))) {
+        logger.info({ jobId: job.id, emailId: job.data?.emailId }, "skipping application processing for a deleted account");
+        return skippedForDeletedAccount();
+      }
+
       const startedAt = Date.now();
       const outcome = await processApplicationFromEmail(job.data);
 
