@@ -99,7 +99,7 @@ export function enqueueProcessEmail(data: { emailId: string; userId: string; for
   return add(QUEUES.emailProcessing, JOBS.processEmail, data, {
     ...options,
     // Idempotency at the queue level: one in-flight processing job per email.
-    jobId: options.jobId ?? `email:${data.emailId}${data.force ? `:${Date.now()}` : ""}`,
+   jobId: options.jobId ?? `email-${data.emailId}${data.force ? `-${Date.now()}` : ""}`,
   });
 }
 
