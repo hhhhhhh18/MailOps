@@ -3,7 +3,6 @@ import request from "supertest";
 import { createApp } from "../../src/app";
 import { redactSecrets } from "../../src/utils/redact";
 import { randomToken } from "../../src/utils/crypto";
-import { env } from "../../src/config/env";
 
 /**
  * Email verification: the parts that need no database.
@@ -54,17 +53,6 @@ describe("CSRF on resend-verification", () => {
       .set("X-CSRF-Token", "different-value");
 
     expect(response.status).toBe(403);
-  });
-});
-
-/**
- * Rate limiting lives in its own file: deliberately exhausting a limiter would
- * otherwise poison every later request in this process, which is exactly the
- * interference that broke the validation tests below.
- */
-describe.skip("rate limiting on resend-verification (see email-verification-rate-limit.test.ts)", () => {
-  it("is covered in a dedicated file", () => {
-    expect(env.AUTH_RATE_LIMIT_MAX).toBeGreaterThan(0);
   });
 });
 

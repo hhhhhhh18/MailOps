@@ -39,6 +39,24 @@ process.env.GMAIL_SYNC_LOOKBACK_DAYS = "60";
 process.env.GMAIL_MAX_MESSAGES_PER_SCAN = "25";
 process.env.RATE_LIMIT_MAX = "1000";
 process.env.AUTH_RATE_LIMIT_MAX = "1000";
+
+/**
+ * Give every test file its own rate-limit namespace.
+ *
+ * The limiters are Redis-backed now, so their counters are shared across the whole
+ * process — and across the machine — rather than living in process memory. That
+ * removes the isolation vitest's per-file module registry used to provide: whichever
+ * test file happens to hit an auth route first consumes the budget that every other
+ * file in the run is asserting against, so a file that passes alone fails in the
+ * suite and vice versa. It is also why a burst test cannot simply clean up after
+ * itself while sibling files run in parallel.
+ *
+ * `setupFiles` are executed once per test file, before that file's module graph is
+ * imported, so the stores in middleware/security.ts pick this up. Each file gets a
+ * unique namespace, which means no test needs to delete anything from Redis and
+ * nothing leaks into a later run. The keys expire on their own with the window.
+ */
+process.env.RATE_LIMIT_KEY_PREFIX = `rl:test:${crypto.randomUUID()}`;
 process.env.SLACK_WEBHOOK_URL = "";
 process.env.WHATSAPP_ACCESS_TOKEN = "";
 process.env.VOICE_ACCOUNT_SID = "";

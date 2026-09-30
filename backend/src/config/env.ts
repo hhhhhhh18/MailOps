@@ -91,6 +91,19 @@ const envSchema = z.object({
   RATE_LIMIT_MAX: int(120),
   AUTH_RATE_LIMIT_MAX: int(10),
 
+  /**
+   * Namespace for the Redis-backed rate-limit keys, which are written as
+   * `${RATE_LIMIT_KEY_PREFIX}:global:<client>` and `${RATE_LIMIT_KEY_PREFIX}:auth:<client>`.
+   *
+   * The default reproduces the original `rl:global:` / `rl:auth:` keys exactly, so an
+   * existing deployment is unaffected. It exists because the counters now live in
+   * Redis rather than in process memory: with a fixed prefix, dev, test, CI and any
+   * other process sharing a Redis instance all increment the same bucket and consume
+   * each other's quota. Overriding it per environment keeps those budgets independent
+   * (the test suite gives every test file its own namespace — see tests/setup.ts).
+   */
+  RATE_LIMIT_KEY_PREFIX: z.string().default("rl"),
+
   WORKER_CONCURRENCY: int(4),
   SCHEDULER_ENABLED: bool(true),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),

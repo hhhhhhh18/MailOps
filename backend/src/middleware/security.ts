@@ -3,7 +3,9 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import { RedisStore, type RedisReply } from "rate-limit-redis";
 import { env, isProduction } from "../config/env";
+import { redis } from "../config/redis";
 import { AppError, ERROR_CODES, ForbiddenError } from "../utils/errors";
 import { randomToken, safeEqual } from "../utils/crypto";
 import { CSRF_COOKIE } from "../services/auth/auth.service";
@@ -37,7 +39,9 @@ export const securityHeaders = helmet({
     : false, // The dev server needs inline scripts for React refresh.
   crossOriginEmbedderPolicy: false,
   referrerPolicy: { policy: "strict-origin-when-cross-origin" },
-  hsts: isProduction ? { maxAge: 31_536_000, includeSubDomains: true, preload: true } : false,
+  hsts: isProduction
+    ? { maxAge: 31_536_000, includeSubDomains: true, preload: true }
+    : false,
   frameguard: { action: "deny" },
   noSniff: true,
 });
@@ -46,32 +50,79 @@ export const corsMiddleware = cors({
   origin(origin, callback) {
     // Same-origin/non-browser callers have no Origin header.
     if (!origin) return callback(null, true);
-    const allowed = [env.WEB_BASE_URL, "http://localhost:3000", "http://127.0.0.1:3000"];
+
+    const allowed = [
+      env.WEB_BASE_URL,
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+    ];
+
     if (allowed.includes(origin)) return callback(null, true);
-    callback(new ForbiddenError(`Origin ${origin} is not allowed to call the MailOps API`));
+
+    callback(
+      new ForbiddenError(`Origin ${origin} is not allowed to call the MailOps API`),
+    );
   },
   credentials: true,
   methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token", "X-Request-Id"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-CSRF-Token",
+    "X-Request-Id",
+  ],
   exposedHeaders: ["X-Request-Id", "RateLimit-Remaining", "Retry-After"],
   maxAge: 600,
 });
 
 export const cookiesMiddleware = cookieParser();
 
+/**
+ * Redis-backed rate-limit stores.
+ *
+ * Each express-rate-limit instance gets its own store instance because a
+ * store instance must not be shared between multiple limiters.
+ *
+ * The key prefix is namespaced through configuration rather than hard-coded. The
+ * counters live in Redis, so they are shared by every process pointed at the same
+ * instance — dev, test and CI included. A fixed prefix means those environments
+ * silently consume each other's quota and tests inherit whatever budget a sibling
+ * left behind. `RATE_LIMIT_KEY_PREFIX` defaults to "rl", which reproduces the
+ * original keys byte for byte.
+ */
+const globalRateLimitStore = new RedisStore({
+  prefix: `${env.RATE_LIMIT_KEY_PREFIX}:global:`,
+  sendCommand: (command: string, ...args: string[]) =>
+    redis.call(command, ...args) as Promise<RedisReply>,
+});
+
+const authRateLimitStore = new RedisStore({
+  prefix: `${env.RATE_LIMIT_KEY_PREFIX}:auth:`,
+  sendCommand: (command: string, ...args: string[]) =>
+    redis.call(command, ...args) as Promise<RedisReply>,
+});
+
 export const globalRateLimit = rateLimit({
   windowMs: env.RATE_LIMIT_WINDOW_MS,
   max: env.RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
+  store: globalRateLimitStore,
+
   // Health checks must never be throttled.
   skip: (req) => req.path === "/health" || req.path === "/health/live",
+
   handler: (_req, _res, next) => {
-    next(new AppError("Too many requests. Please slow down and try again shortly.", {
-      statusCode: 429,
-      code: ERROR_CODES.RATE_LIMITED,
-      retryable: true,
-    }));
+    next(
+      new AppError(
+        "Too many requests. Please slow down and try again shortly.",
+        {
+          statusCode: 429,
+          code: ERROR_CODES.RATE_LIMITED,
+          retryable: true,
+        },
+      ),
+    );
   },
 });
 
@@ -81,13 +132,18 @@ export const authRateLimit = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: false,
+  store: authRateLimitStore,
+
   handler: (_req, _res, next) => {
     next(
-      new AppError("Too many sign-in attempts. Please wait a minute before trying again.", {
-        statusCode: 429,
-        code: ERROR_CODES.RATE_LIMITED,
-        retryable: true,
-      }),
+      new AppError(
+        "Too many sign-in attempts. Please wait a minute before trying again.",
+        {
+          statusCode: 429,
+          code: ERROR_CODES.RATE_LIMITED,
+          retryable: true,
+        },
+      ),
     );
   },
 });
@@ -101,7 +157,11 @@ export const authRateLimit = rateLimit({
  */
 export const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
-export function csrfMiddleware(req: Request, _res: Response, next: NextFunction): void {
+export function csrfMiddleware(
+  req: Request,
+  _res: Response,
+  next: NextFunction,
+): void {
   if (SAFE_METHODS.has(req.method)) {
     next();
     return;
@@ -115,10 +175,16 @@ export function csrfMiddleware(req: Request, _res: Response, next: NextFunction)
   }
 
   const cookieToken = req.cookies?.[CSRF_COOKIE] as string | undefined;
-  const headerToken = (req.headers["x-csrf-token"] as string | undefined) ?? (req.body?._csrf as string | undefined);
+  const headerToken =
+    (req.headers["x-csrf-token"] as string | undefined) ??
+    (req.body?._csrf as string | undefined);
 
   if (!cookieToken || !headerToken || !safeEqual(cookieToken, headerToken)) {
-    next(new ForbiddenError("Your session could not be verified. Refresh the page and try again."));
+    next(
+      new ForbiddenError(
+        "Your session could not be verified. Refresh the page and try again.",
+      ),
+    );
     return;
   }
 
@@ -127,8 +193,11 @@ export function csrfMiddleware(req: Request, _res: Response, next: NextFunction)
 
 export function ensureCsrfCookie(req: Request, res: Response): string {
   const existing = req.cookies?.[CSRF_COOKIE] as string | undefined;
+
   if (existing) return existing;
+
   const token = randomToken(24);
+
   res.cookie(CSRF_COOKIE, token, {
     httpOnly: false, // must be readable by the client to be echoed back
     sameSite: "lax",
@@ -136,15 +205,21 @@ export function ensureCsrfCookie(req: Request, res: Response): string {
     path: "/",
     maxAge: 86_400_000,
   });
+
   return token;
 }
 
 /** Guards the interactive Gmail OAuth start endpoint against open redirects. */
-export function safeRedirectPath(value: unknown, fallback = "/settings?section=gmail"): string {
+export function safeRedirectPath(
+  value: unknown,
+  fallback = "/settings?section=gmail",
+): string {
   if (typeof value !== "string") return fallback;
+
   // Only same-app absolute paths are permitted.
   if (!value.startsWith("/") || value.startsWith("//")) return fallback;
   if (value.includes("\\") || value.includes("\n")) return fallback;
+
   return value;
 }
 
