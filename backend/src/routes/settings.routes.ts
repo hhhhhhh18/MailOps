@@ -54,6 +54,11 @@ settingsRouter.delete(
   validate({ body: deleteDataSchema }),
   asyncHandler(deleteEmailData),
 );
-settingsRouter.post("/privacy/retention-sweep", requireAuth, asyncHandler(retentionSweep));
+settingsRouter.post(
+  "/privacy/retention-sweep",
+  requireAuth,
+  blockDemoWrites,
+  asyncHandler(retentionSweep),
+);
 
 settingsRouter.get("/diagnostics", requireAuth, asyncHandler(diagnostics));
