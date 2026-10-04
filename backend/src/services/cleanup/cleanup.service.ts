@@ -3,7 +3,14 @@ import { logger } from "../../config/logger";
 import { prisma } from "../../config/prisma";
 import { CLEANUP_CATEGORIES, NEVER_CLEANUP_CATEGORIES } from "../../config/constants";
 import { buildPageMeta, type PageMeta } from "../../utils/http";
-import { describeError, NotFoundError, ProtectedResourceError, ValidationError } from "../../utils/errors";
+import {
+  describeError,
+  ERROR_CODES,
+  IntegrationError,
+  NotFoundError,
+  ProtectedResourceError,
+  ValidationError,
+} from "../../utils/errors";
 import { sanitizeForAudit } from "../../utils/redact";
 import { isProtectedSender } from "../ai/heuristics/signals";
 import { GmailClient } from "../gmail/client";
@@ -518,8 +525,16 @@ async function upsertBlockedAction(
 }
 
 /**
- * Undeletes a trashed message (Gmail keeps trashed mail for 30 days) and marks
- * the audit record reverted. Archive actions are reversed by restoring INBOX.
+ * Reverses an executed cleanup action and marks the audit record reverted.
+ *
+ * A DELETE is reversed with Gmail's untrash endpoint rather than by re-adding INBOX:
+ * TRASH is a system label, so `messages.modify` cannot clear it and the message would
+ * stay in Trash (where Gmail purges it after 30 days). An ARCHIVE only removed INBOX,
+ * so restoring that label is the exact inverse.
+ *
+ * Records are only updated once Gmail has confirmed the change, so a revert that
+ * fails leaves the action EXECUTED and retryable rather than claiming a restore that
+ * never happened.
  */
 export async function revertCleanupAction(userId: string, cleanupActionId: string): Promise<{ reverted: boolean }> {
   const action = await prisma.cleanupAction.findFirst({
@@ -542,14 +557,41 @@ export async function revertCleanupAction(userId: string, cleanupActionId: strin
   const client = await GmailClient.forAccount(account);
 
   if (action.type === "DELETE") {
-    // Gmail exposes untrash through the trash endpoint, which is not part of the
-    // minimal scope set if the message is already purged; surface the failure.
-    await client.addLabel(action.email.gmailMessageId, "INBOX");
+    try {
+      await client.untrashMessage(action.email.gmailMessageId);
+    } catch (error) {
+      const message = describeError(error).message;
+
+      // The message is still in Trash, so nothing may be recorded as restored: the
+      // action stays EXECUTED (and therefore revertible) and `deletedFromGmail`
+      // keeps its existing value. Only the error is recorded.
+      await prisma.cleanupAction.update({
+        where: { id: action.id },
+        data: { error: message.slice(0, 500) },
+      });
+      await recordAudit({
+        userId,
+        actor: "SYSTEM",
+        action: AUDIT_ACTIONS.cleanupFailed,
+        entityType: "CleanupAction",
+        entityId: action.id,
+        summary: `Revert failed: ${message}`,
+        metadata: { type: action.type, gmailMessageId: action.email.gmailMessageId },
+      });
+
+      // `GmailClient.call` already classifies the failure (retryable vs credential
+      // problem); preserve that classification instead of inventing a second one.
+      throw error instanceof IntegrationError
+        ? error
+        : new IntegrationError(message, ERROR_CODES.GMAIL_API_UNAVAILABLE, { retryable: true });
+    }
+
     await prisma.email.update({
       where: { id: action.email.id },
       data: { deletedFromGmail: false, deletedFromMailops: null },
     });
   } else if (action.type === "ARCHIVE") {
+    // Archive only removed INBOX, so restoring that label is the exact inverse.
     await client.addLabel(action.email.gmailMessageId, "INBOX");
   } else {
     throw new ValidationError(`A ${action.type} action cannot be reverted`);

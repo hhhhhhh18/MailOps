@@ -146,6 +146,17 @@ export class GmailClient {
     await this.call("users.messages.trash", () => this.gmail.users.messages.trash({ userId: "me", id }));
   }
 
+  /**
+   * Takes a message back out of Trash.
+   *
+   * TRASH is a Gmail system label, so `messages.modify` cannot clear it — adding
+   * INBOX through modify leaves the message in Trash. This dedicated endpoint is the
+   * only way to actually restore it, which is why it is separate from `addLabel`.
+   */
+  async untrashMessage(id: string): Promise<void> {
+    await this.call("users.messages.untrash", () => this.gmail.users.messages.untrash({ userId: "me", id }));
+  }
+
   /** Marks read without touching folders. */
   async markRead(id: string): Promise<void> {
     await this.call("users.messages.modify", () =>
