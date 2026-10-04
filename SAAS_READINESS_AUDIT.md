@@ -136,6 +136,12 @@ than one API instance, or after a restart between consent-start and callback, th
 callback fails with "OAuth state is invalid or has already been used". The code comment
 already acknowledges Redis is required for multi-instance deployments.
 
+**Resolved.** State now lives in Redis (`services/gmail/oauth-state.store.ts`) behind a
+dedicated fail-fast client. The 10-minute TTL is set at write time, and a Lua script
+makes consumption atomic and single-use so two concurrent callbacks cannot both succeed.
+The store fails closed (503) while Redis is down rather than falling back to process
+memory, which would reinstate this finding.
+
 ### P0-10 · Deployment has no migration gate, no TLS, and no backups
 The API image runs `node dist/index.js` with no `prisma migrate deploy` step; migrations
 are a manual, documented command. Nothing in the repo terminates TLS or defines a reverse
@@ -217,7 +223,7 @@ Ordered by risk-of-harm and by dependency (later items need earlier ones):
 5. **P0-5** Move rate-limit state to Redis and add per-user limits on expensive
    endpoints (`/gmail/scan`, `/emails/:id/reprocess`, `/privacy/export`).
 6. **P0-9** Move OAuth state to Redis (small, self-contained, removes a hard
-   multi-instance failure).
+   multi-instance failure). — **DONE**
 7. **P0-6 + P0-7 + P0-8** Configure a real AI provider, add a production boot guard,
    add per-user token/cost accounting and caps, and add outbound redaction + disclosure.
    *This cluster is the difference between "a demo of an AI product" and an AI product.*
@@ -252,7 +258,7 @@ Ordered by risk-of-harm and by dependency (later items need earlier ones):
 | P0-6 Real AI provider | `config/env.ts`, `services/ai/provider.ts`, `providers/openai-compatible.provider.ts`, `services/ai/runner.ts` | `EmailAnalysis.provider/model` | `app/(app)/settings/page.tsx` (AI section) |
 | P0-7 AI cost caps | `services/ai/runner.ts`, `services/ai/analysis.service.ts`, `services/analytics/analytics.service.ts` | `EmailAnalysis.tokenUsage` (exists) + quota record | `app/(app)/analytics/page.tsx`, settings |
 | P0-8 Outbound redaction/consent | `services/ai/prompts.ts`, `services/ai/runner.ts`, `utils/redact.ts`, `services/settings/settings.service.ts` | `UserSettings` (processing consent, redaction level) | `app/(app)/settings/page.tsx` (Privacy) |
-| P0-9 OAuth state to Redis | `services/gmail/oauth.service.ts`, `config/redis.ts` | — (Redis state) | — |
+| P0-9 OAuth state to Redis | `services/gmail/oauth-state.store.ts`, `services/gmail/oauth.service.ts`, `controllers/gmail.controller.ts`, `config/redis.ts` | — (Redis state, `oauth:state:*`, 600 s TTL) | — |
 | P0-10 Deploy baseline | `backend/Dockerfile`, `docker-compose.yml`, `DEPLOYMENT.md`, new CI/CD + proxy + backup config | migration gate via `prisma migrate deploy` | — |
 | P0-11 Frontend tests | — | — | new frontend test setup, `components/**`, `app/**` |
 
@@ -270,8 +276,9 @@ Ordered by risk-of-harm and by dependency (later items need earlier ones):
    disclosure** (P0-8) — the highest-sensitivity data in the product leaves the trust
    boundary by design today.
 6. **Unbounded third-party spend per user** (P0-7) — an economic denial-of-service risk.
-7. **Gmail connection breaks in multi-instance deployment** (P0-9) — availability, and a
-   partial-consent state can be created without a usable callback.
+7. **(Resolved in F4)** **Gmail connection breaks in multi-instance deployment** (P0-9) —
+   availability, and a partial-consent state can be created without a usable callback.
+   State is now Redis-backed and consumed atomically; see §P0-9.
 8. **No backups for derived mailbox history** (P0-10) — irreversible data loss.
 9. **Refresh-token reuse is not detected** (P1-1) — a stolen token can be replayed once,
    and the legitimate session is not revoked in response.

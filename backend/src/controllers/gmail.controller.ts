@@ -35,7 +35,7 @@ export async function startOAuth(req: Request, res: Response) {
   }
 
   const returnTo = safeRedirectPath(req.body?.returnTo);
-  const url = buildConsentUrl(userId);
+  const url = await buildConsentUrl(userId);
 
   await recordAudit({
     userId,
@@ -77,7 +77,7 @@ export async function oauthCallback(req: Request, res: Response) {
 
   try {
     // State is single-use and bound to the user who started the flow.
-    const userId = consumeState(state);
+    const userId = await consumeState(state);
     const account = await connectGmailAccount(userId, code);
 
     // Kick off the first scan immediately so the dashboard has data quickly.

@@ -95,9 +95,23 @@ failure is logged and non-fatal — the local credentials are still removed.
 
 ### Multi-instance note
 
-The pending-state store is in-process, which is correct for a single API instance.
-For a horizontally scaled deployment, move it to Redis with the same 10-minute
-TTL. See DEPLOYMENT.md.
+OAuth state is held in Redis (`services/gmail/oauth-state.store.ts`), so the callback can
+land on any API instance and a restart between consent-start and callback no longer
+invalidates an in-flight flow. Three properties are deliberate:
+
+- **The 10-minute TTL is enforced by Redis**, set at write time rather than by a sweep
+  that only ran when someone else started a flow. An abandoned consent screen leaves
+  nothing usable behind.
+- **Consumption is atomic and single-use.** The read and the delete happen in a single
+  Lua script, so two concurrent callbacks cannot both succeed — a plain `GET` followed
+  by `DEL` would let both read the user id before either deleted it.
+- **It fails closed.** The store uses a dedicated fail-fast client (as the rate limiter
+  does, and for the same reason: the shared client's `maxRetriesPerRequest: null` hangs
+  an awaited command while Redis reconnects) plus a per-command timeout. While Redis is
+  down, starting a connection returns 503 rather than degrading to process memory, which
+  would reintroduce the cross-instance and replay weaknesses.
+
+See DEPLOYMENT.md.
 
 ---
 
@@ -315,8 +329,10 @@ because a provider error can echo request material.
 
 Stated plainly rather than implied:
 
-1. **OAuth state is in-process.** Correct for one API instance; a multi-instance
-   deployment must move it to Redis (see DEPLOYMENT.md).
+1. **Connecting Gmail requires Redis.** OAuth state is Redis-backed and fails closed, so
+   while Redis is down `POST /api/gmail/oauth/start` returns 503 instead of falling back
+   to process memory. The alternative — an in-process fallback — would reintroduce the
+   cross-instance and replay gaps the Redis store exists to close.
 2. **Access tokens cannot be revoked before expiry.** A signed JWT stays valid for
    up to `JWT_ACCESS_TTL_SECONDS` (default 900) after logout. Shortening the TTL or
    adding a denylist for sensitive deployments is the mitigation.

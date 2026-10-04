@@ -3,9 +3,10 @@ import type { GmailAccount, User } from "@prisma/client";
 import { env, googleOAuthConfigured } from "../../config/env";
 import { logger } from "../../config/logger";
 import { prisma } from "../../config/prisma";
-import { decryptSecret, encryptSecret, randomToken, safeEqual } from "../../utils/crypto";
+import { decryptSecret, encryptSecret, safeEqual } from "../../utils/crypto";
 import { AppError, ERROR_CODES, IntegrationError } from "../../utils/errors";
 import { GMAIL_SCOPES, auditGrantedScopes } from "./scopes";
+import { issueState } from "./oauth-state.store";
 
 /**
  * Google OAuth 2.0 for Gmail.
@@ -17,21 +18,16 @@ import { GMAIL_SCOPES, auditGrantedScopes } from "./scopes";
  *  - revocation on disconnect (so the grant actually disappears from the user's
  *    Google account, not just from our database)
  *  - tokens are never logged, never returned to the client
+ *
+ * The `state` parameter now lives in Redis rather than process memory, so a callback
+ * can land on any API instance and survives a restart mid-flow. `oauth-state.store.ts`
+ * owns issuance, the 10-minute TTL, atomic single-use consumption and the fail-closed
+ * behaviour when Redis is unreachable. The state helpers are re-exported here because
+ * every existing caller — the controller and the test suite — imports them from this
+ * module.
  */
 
-const STATE_TTL_MS = 10 * 60_000;
-
-interface PendingState {
-  userId: string;
-  nonce: string;
-  createdAt: number;
-}
-
-/**
- * State store. In-process is sufficient for a single API instance; in a
- * multi-instance deployment set REDIS to hold this (see DEPLOYMENT.md).
- */
-const pendingStates = new Map<string, PendingState>();
+export { consumeState, peekState, STATE_TTL_SECONDS } from "./oauth-state.store";
 
 export function isGmailConfigured(): boolean {
   return googleOAuthConfigured;
@@ -47,14 +43,11 @@ function createOAuthClient(): Auth.OAuth2Client {
   return new google.auth.OAuth2(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET, env.GOOGLE_OAUTH_REDIRECT_URI);
 }
 
-export function buildConsentUrl(userId: string): string {
+export async function buildConsentUrl(userId: string): Promise<string> {
+  // Configuration is checked before the state is written, so a misconfigured server
+  // fails without leaving a usable state behind.
   const client = createOAuthClient();
-  const nonce = randomToken(24);
-  pendingStates.set(nonce, { userId, nonce, createdAt: Date.now() });
-
-  // Opportunistic cleanup of expired states.
-  const cutoff = Date.now() - STATE_TTL_MS;
-  for (const [key, value] of pendingStates) if (value.createdAt < cutoff) pendingStates.delete(key);
+  const nonce = await issueState(userId);
 
   return client.generateAuthUrl({
     access_type: "offline",
@@ -63,28 +56,6 @@ export function buildConsentUrl(userId: string): string {
     state: nonce,
     include_granted_scopes: true,
   });
-}
-
-export function consumeState(state: string | undefined): string {
-  if (!state) {
-    throw new AppError("Missing OAuth state parameter", { statusCode: 400, code: ERROR_CODES.VALIDATION_ERROR });
-  }
-  const entry = pendingStates.get(state);
-  if (!entry) {
-    throw new AppError("OAuth state is invalid or has already been used", {
-      statusCode: 400,
-      code: ERROR_CODES.VALIDATION_ERROR,
-    });
-  }
-  // Single-use: delete before validating anything else.
-  pendingStates.delete(state);
-  if (Date.now() - entry.createdAt > STATE_TTL_MS) {
-    throw new AppError("OAuth state has expired. Please start the connection again.", {
-      statusCode: 400,
-      code: ERROR_CODES.VALIDATION_ERROR,
-    });
-  }
-  return entry.userId;
 }
 
 export interface ConnectedGmailAccount {
@@ -325,12 +296,6 @@ export async function disconnectGmailAccount(user: User, gmailAccountId: string)
 
   logger.info({ userId: user.id, accountId: account.id, revoked }, "gmail account disconnected");
   return { revoked };
-}
-
-/** Test helper: verifies a state nonce without consuming it. */
-export function peekState(state: string): boolean {
-  const entry = pendingStates.get(state);
-  return Boolean(entry && Date.now() - entry.createdAt <= STATE_TTL_MS);
 }
 
 export function assertStateMatches(state: string, expected: string): boolean {

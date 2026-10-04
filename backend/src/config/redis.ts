@@ -67,6 +67,24 @@ export const rateLimitRedis = createRedisClient("ratelimit", {
 });
 
 /**
+ * Dedicated client for the OAuth `state` store.
+ *
+ * Same fail-fast posture as the rate-limit client and for the same reason: the shared
+ * client must keep `maxRetriesPerRequest: null` for BullMQ, and that is precisely what
+ * makes an awaited command hang while Redis is reconnecting instead of failing. OAuth
+ * state is read on the Gmail callback path, so a hung read would hang the user's
+ * browser on a consent redirect.
+ *
+ * Separate from `rateLimitRedis` on purpose — the two have independent lifecycles and
+ * no shared policy, and keeping them apart means an OAuth outage cannot perturb the
+ * rate limiter (or vice versa). Never hand this client to BullMQ.
+ */
+export const oauthStateRedis = createRedisClient("oauth-state", {
+  maxRetriesPerRequest: 1,
+  enableOfflineQueue: false,
+});
+
+/**
  * Bounds an operation that depends on a possibly-unreachable remote.
  *
  * ioredis queues commands while it is reconnecting, so an awaited command against
@@ -109,7 +127,7 @@ export async function checkRedis(timeoutMs = 1500): Promise<{ ok: boolean; error
  * already closed or unreachable falls back to `disconnect()`.
  */
 export async function disconnectRedis(): Promise<void> {
-  for (const client of [redis, rateLimitRedis]) {
+  for (const client of [redis, rateLimitRedis, oauthStateRedis]) {
     try {
       await client.quit();
     } catch {
