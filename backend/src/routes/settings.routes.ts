@@ -23,7 +23,13 @@ import { settingsPatchSchema } from "../services/settings/settings.service";
 export const settingsRouter = Router();
 
 settingsRouter.get("/", requireAuth, asyncHandler(getSettings));
-settingsRouter.patch("/", requireAuth, validate({ body: settingsPatchSchema }), asyncHandler(patchSettings));
+settingsRouter.patch(
+  "/",
+  requireAuth,
+  blockDemoWrites,
+  validate({ body: settingsPatchSchema }),
+  asyncHandler(patchSettings),
+);
 
 // Integrations
 settingsRouter.put(
