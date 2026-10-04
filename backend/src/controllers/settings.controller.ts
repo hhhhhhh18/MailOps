@@ -5,7 +5,7 @@ import { prisma } from "../config/prisma";
 import { env } from "../config/env";
 import { currentUserId } from "../middleware/auth";
 import { ok, paginated } from "../utils/http";
-import { encryptJson, describeKey } from "../utils/crypto";
+import { encryptJson } from "../utils/crypto";
 import { AppError, ERROR_CODES, NotFoundError } from "../utils/errors";
 import {
   exportUserData,
@@ -256,15 +256,42 @@ export async function retentionSweep(req: Request, res: Response) {
   return ok(res, result);
 }
 
-/** Admin-ish diagnostics. Never exposes secrets; only presence + fingerprints. */
+/**
+ * Health/status summary for the settings diagnostics panel.
+ *
+ * Reachable by any authenticated account, so the payload is restricted to
+ * reachability and coarse status. Deliberately omitted:
+ *   - raw driver errors — they embed DB/Redis hosts, ports, usernames and database
+ *     names, and surface precisely when an outage makes them most useful to an attacker;
+ *   - internal queue names, job counters and per-queue error strings;
+ *   - the encryption-key fingerprint and length, which form a key-verification oracle.
+ * Those details still reach the server logs through `reportDependencies()` at startup.
+ *
+ * `status` is derived with the same formula as `GET /health` so the two can never
+ * disagree: a dead database is "unavailable", a dead Redis still serves reads and so
+ * is only "degraded".
+ *
+ * NOTE — separate follow-up exposure, intentionally left unfixed here:
+ * `GET /api/dashboard/system` (`systemStatus` in analytics.controller.ts) still returns
+ * the raw `getQueueHealth()` array — queue names, counters and error strings — to any
+ * authenticated account. It carries the same defect this endpoint had before
+ * sanitization and needs the same treatment in its own change.
+ */
 export async function diagnostics(_req: Request, res: Response) {
   const [database, redis, queues] = await Promise.all([checkDatabase(), checkRedis(), getQueueHealth()]);
+
   return ok(res, {
-    database,
-    redis,
-    queues,
-    encryption: describeKey(),
-    ai: { provider: env.AI_PROVIDER, configured: env.AI_PROVIDER === "heuristic" || Boolean(env.AI_API_KEY) },
+    status: !database.ok ? "unavailable" : redis.ok ? "ok" : "degraded",
+    dependencies: {
+      database: { ok: database.ok },
+      redis: { ok: redis.ok },
+      // Aggregate only — never queue names, depths or error strings.
+      queues: { available: queues.some((queue) => queue.available) },
+      aiProvider: env.AI_PROVIDER,
+      aiConfigured: env.AI_PROVIDER === "heuristic" || Boolean(env.AI_API_KEY),
+    },
+    // Presence only. `length` and `fingerprint` are key-derived and stay server-side.
+    encryption: { configured: Boolean(env.ENCRYPTION_KEY) },
     environment: env.NODE_ENV,
   });
 }

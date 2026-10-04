@@ -656,3 +656,26 @@ export interface SettingsResponse {
     escalationDelaysMinutes: { min: number; max: number; maxStages: number };
   };
 }
+
+/**
+ * Sanitized diagnostics payload (`GET /api/settings/diagnostics`).
+ *
+ * Mirrors the allow-list enforced by the backend `diagnostics` controller: status and
+ * reachability only. Raw driver errors, internal queue names/depths and the
+ * encryption-key fingerprint are intentionally absent — do not add them back, they are
+ * reachable by every authenticated account.
+ */
+export interface Diagnostics {
+  status: "ok" | "degraded" | "unavailable";
+  dependencies: {
+    database: { ok: boolean };
+    redis: { ok: boolean };
+    /** Aggregate only — individual queues are never exposed. */
+    queues: { available: boolean };
+    aiProvider: string;
+    aiConfigured: boolean;
+  };
+  /** Presence only; never the key length or fingerprint. */
+  encryption: { configured: boolean };
+  environment: string;
+}

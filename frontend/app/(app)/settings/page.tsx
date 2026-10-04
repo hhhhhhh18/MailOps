@@ -1452,18 +1452,24 @@ function DiagnosticsPanel() {
 
   if (isLoading || !data) return <Skeleton className="h-24 w-full" />;
 
+  const { dependencies } = data;
+
   return (
     <dl className="space-y-2 text-xs">
       <Row label="Environment" value={data.environment} />
-      <Row label="Database" value={data.database.ok ? "reachable" : `unavailable — ${data.database.error ?? "unknown"}`} ok={data.database.ok} />
-      <Row label="Redis (queues)" value={data.redis.ok ? "reachable" : `unavailable — ${data.redis.error ?? "unknown"}`} ok={data.redis.ok} />
-      <Row label="AI provider" value={data.ai.provider === "heuristic" ? "built-in deterministic engine" : data.ai.provider} ok={data.ai.configured} />
+      <Row label="Database" value={dependencies.database.ok ? "reachable" : "unavailable"} ok={dependencies.database.ok} />
+      <Row label="Redis (queues)" value={dependencies.redis.ok ? "reachable" : "unavailable"} ok={dependencies.redis.ok} />
+      <Row
+        label="AI provider"
+        value={dependencies.aiProvider === "heuristic" ? "built-in deterministic engine" : dependencies.aiProvider}
+        ok={dependencies.aiConfigured}
+      />
       <Row
         label="Encryption key"
-        value={data.encryption.configured ? `configured (${data.encryption.length} bytes, ${data.encryption.fingerprint})` : "development fallback in use"}
+        value={data.encryption.configured ? "configured" : "development fallback in use"}
         ok={data.encryption.configured}
       />
-      {!data.redis.ok && (
+      {!dependencies.redis.ok && (
         <div className="pt-2">
           <InlineAlert tone="waiting" title="Background processing is degraded">
             Without Redis, scanning, AI processing and escalation timers cannot run. The dashboard remains available.

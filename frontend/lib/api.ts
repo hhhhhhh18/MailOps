@@ -21,6 +21,7 @@ import type {
   PrivacySummary,
   AccountDeletionResult,
   RejectedApplication,
+  Diagnostics,
   ScanJobRecord,
   ScanSchedule,
   SettingsResponse,
@@ -443,15 +444,7 @@ export const api = {
         body: { keepApplicationHistory },
       }),
     exportData: () => request<Response>("/api/settings/privacy/export", { json: false }),
-    diagnostics: () =>
-      request<{
-        database: { ok: boolean; error?: string };
-        redis: { ok: boolean; error?: string };
-        encryption: { configured: boolean; length: number; fingerprint: string };
-        ai: { provider: string; configured: boolean };
-        environment: string;
-        queues: Array<{ name: string; available: boolean; waiting: number; failed: number }>;
-      }>("/api/settings/diagnostics"),
+    diagnostics: () => request<Diagnostics>("/api/settings/diagnostics"),
   },
 };
 
