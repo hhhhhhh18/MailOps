@@ -5,8 +5,9 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { RedisStore, type RedisReply } from "rate-limit-redis";
 import { env, isProduction } from "../config/env";
-import { redis } from "../config/redis";
-import { AppError, ERROR_CODES, ForbiddenError } from "../utils/errors";
+import { logger } from "../config/logger";
+import { REDIS_OP_TIMEOUT_MS, rateLimitRedis, withTimeout } from "../config/redis";
+import { AppError, ERROR_CODES, ForbiddenError, describeError } from "../utils/errors";
 import { randomToken, safeEqual } from "../utils/crypto";
 import { CSRF_COOKIE } from "../services/auth/auth.service";
 
@@ -77,6 +78,81 @@ export const corsMiddleware = cors({
 
 export const cookiesMiddleware = cookieParser();
 
+/** Fail-open for a limiter whose only job is protecting capacity. */
+type LimiterMode = "fail-open" | "fail-closed";
+
+/** Answered for `SCRIPT LOAD` while Redis is unreachable. See `createStoreCommand`. */
+const FAKE_SCRIPT_SHA = "0".repeat(40);
+
+/**
+ * Warns at most once per interval.
+ *
+ * An outage makes *every* store command fail, so logging per request would emit one
+ * warning per request for its whole duration and drown the log. Connection-level
+ * failures are already reported by `createRedisClient`; this covers the request path.
+ */
+let lastDegradedWarnAt = 0;
+const DEGRADED_WARN_INTERVAL_MS = 30_000;
+
+function warnRateLimitDegraded(error: unknown, mode: LimiterMode): void {
+  const now = Date.now();
+  if (now - lastDegradedWarnAt < DEGRADED_WARN_INTERVAL_MS) return;
+
+  lastDegradedWarnAt = now;
+  logger.warn(
+    { ...describeError(error), limiter: mode },
+    "rate-limit store unavailable; degrading",
+  );
+}
+
+/**
+ * Builds a store command that cannot leave a request hanging.
+ *
+ * Redis can fail in two ways and they need different mechanisms:
+ *
+ *  1. Unreachable — `enableOfflineQueue: false` on the dedicated client makes ioredis
+ *     reject immediately, so nothing waits behind a dead socket.
+ *  2. Reachable but silent (black-holed socket, frozen host) — the stream is still
+ *     writeable, so the offline-queue setting does not apply and the command stays in
+ *     flight. Only the timeout bounds this one.
+ *
+ * `SCRIPT LOAD` is answered even while Redis is down. It belongs to store
+ * construction rather than the request path, and the constructor fires it without
+ * awaiting, so a rejection there would surface as an unhandled rejection. The
+ * `EVALSHA` that follows is what actually decides the request.
+ *
+ * The policy is per limiter. The global bucket only protects capacity, so it fails
+ * open — consistent with the degradation contract in config/redis.ts ("the API still
+ * serves read endpoints"). The auth bucket is what stops credential stuffing, so it
+ * fails closed: while Redis is down it is better to refuse a sign-in attempt we
+ * cannot verify than to admit unlimited ones.
+ */
+function createStoreCommand(mode: LimiterMode) {
+  return (command: string, ...args: string[]): Promise<RedisReply> => {
+    const call = rateLimitRedis.call(command, ...args) as Promise<RedisReply>;
+
+    return withTimeout(call, REDIS_OP_TIMEOUT_MS, "rate-limit store").catch((error: unknown) => {
+      if (command.toUpperCase() === "SCRIPT") return FAKE_SCRIPT_SHA as RedisReply;
+
+      warnRateLimitDegraded(error, mode);
+
+      if (mode === "fail-open") {
+        // `parseScriptResponse` requires exactly [totalHits, timeToExpireMs], and
+        // `toInt` passes numbers through untouched. Zero hits lets the request
+        // through with a sane reset time.
+        return [0, env.RATE_LIMIT_WINDOW_MS] as RedisReply;
+      }
+
+      throw new AppError("Sign-in is temporarily unavailable. Please try again shortly.", {
+        statusCode: 503,
+        code: ERROR_CODES.REDIS_UNAVAILABLE,
+        retryable: true,
+        degraded: true,
+      });
+    });
+  };
+}
+
 /**
  * Redis-backed rate-limit stores.
  *
@@ -92,14 +168,12 @@ export const cookiesMiddleware = cookieParser();
  */
 const globalRateLimitStore = new RedisStore({
   prefix: `${env.RATE_LIMIT_KEY_PREFIX}:global:`,
-  sendCommand: (command: string, ...args: string[]) =>
-    redis.call(command, ...args) as Promise<RedisReply>,
+  sendCommand: createStoreCommand("fail-open"),
 });
 
 const authRateLimitStore = new RedisStore({
   prefix: `${env.RATE_LIMIT_KEY_PREFIX}:auth:`,
-  sendCommand: (command: string, ...args: string[]) =>
-    redis.call(command, ...args) as Promise<RedisReply>,
+  sendCommand: createStoreCommand("fail-closed"),
 });
 
 export const globalRateLimit = rateLimit({
@@ -108,6 +182,11 @@ export const globalRateLimit = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   store: globalRateLimitStore,
+
+  // Safety net only: the store's fail-open command resolves rather than rejecting, so
+  // this should never fire. It guarantees that an unforeseen rejection still lets the
+  // request through instead of becoming a 500.
+  passOnStoreError: true,
 
   // Health checks must never be throttled.
   skip: (req) => req.path === "/health" || req.path === "/health/live",
@@ -133,6 +212,11 @@ export const authRateLimit = rateLimit({
   legacyHeaders: false,
   skipSuccessfulRequests: false,
   store: authRateLimitStore,
+
+  // Load-bearing, not an accident of the default: this limiter fails closed, so a
+  // store rejection has to reach the error handler as a 503 rather than letting the
+  // request through unthrottled.
+  passOnStoreError: false,
 
   handler: (_req, _res, next) => {
     next(

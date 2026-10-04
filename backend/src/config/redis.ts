@@ -1,4 +1,4 @@
-import IORedis, { type Redis } from "ioredis";
+import IORedis, { type Redis, type RedisOptions } from "ioredis";
 import { env } from "./env";
 import { logger } from "./logger";
 
@@ -16,12 +16,16 @@ export const redisConnectionOptions = {
   enableReadyCheck: false,
 };
 
-export function createRedisClient(role: string): Redis {
+export function createRedisClient(role: string, overrides: Partial<RedisOptions> = {}): Redis {
   const client = new IORedis(env.REDIS_URL, {
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
     retryStrategy: (times) => Math.min(times * 500, 10_000),
     lazyConnect: false,
+    // Opt-in per client. The defaults above are the ones BullMQ validates, so a
+    // consumer that is *not* BullMQ can relax them for itself without weakening the
+    // shared client.
+    ...overrides,
   });
 
   client.on("error", (err) => {
@@ -36,6 +40,31 @@ export function createRedisClient(role: string): Redis {
 
 export const redis = globalForRedis.mailopsRedis ?? createRedisClient("shared");
 if (!globalForRedis.mailopsRedis) globalForRedis.mailopsRedis = redis;
+
+/**
+ * Dedicated client for rate limiting.
+ *
+ * Deliberately not the shared instance. That one must keep
+ * `maxRetriesPerRequest: null` for BullMQ, which is exactly what makes ioredis queue
+ * commands while disconnected instead of failing them — and `express-rate-limit`
+ * awaits the store, so a queued command hangs the request. This client fails fast
+ * instead:
+ *
+ *   maxRetriesPerRequest: 1     give up rather than retry forever
+ *   enableOfflineQueue: false   reject immediately when the socket is not writeable
+ *
+ * The retry strategy is left at the factory default on purpose: the client keeps
+ * reconnecting, so rate limiting recovers by itself once Redis returns. Both
+ * behaviours are only half the story — a reachable-but-silent Redis still leaves a
+ * command in flight, which is why the stores also bound every command with a
+ * timeout. See `createStoreCommand` in middleware/security.ts.
+ *
+ * Never hand this client to BullMQ: it would be rejected as a blocking connection.
+ */
+export const rateLimitRedis = createRedisClient("ratelimit", {
+  maxRetriesPerRequest: 1,
+  enableOfflineQueue: false,
+});
 
 /**
  * Bounds an operation that depends on a possibly-unreachable remote.
@@ -71,11 +100,21 @@ export async function checkRedis(timeoutMs = 1500): Promise<{ ok: boolean; error
   }
 }
 
+/**
+ * Closes every Redis client this process owns.
+ *
+ * Both entrypoints already call this during shutdown, so adding a client here is what
+ * guarantees it is closed — rather than having to remember it in two shutdown
+ * sequences. `quit()` is tried first so pending replies drain; a client that is
+ * already closed or unreachable falls back to `disconnect()`.
+ */
 export async function disconnectRedis(): Promise<void> {
-  try {
-    await redis.quit();
-  } catch {
-    redis.disconnect();
+  for (const client of [redis, rateLimitRedis]) {
+    try {
+      await client.quit();
+    } catch {
+      client.disconnect();
+    }
   }
 }
 
