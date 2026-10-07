@@ -1,7 +1,7 @@
 import type { User } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { logger } from "../../config/logger";
-import { hashToken, verifyPassword } from "../../utils/crypto";
+import { receiptFingerprint, verifyPassword } from "../../utils/crypto";
 import {
   ForbiddenError,
   UnauthenticatedError,
@@ -42,9 +42,17 @@ import { purgeUserExternalData } from "../../queues";
  * `onDelete` clauses and tests/unit/schema-deletion-coverage.test.ts.
  */
 
-/** HMAC-SHA256 fingerprint. Deterministic and recomputable, but not reversible. */
+/**
+ * HMAC-SHA256 receipt fingerprint (`v1.<hex>`), deterministic and recomputable but not
+ * reversible.
+ *
+ * Keyed by `RECEIPT_HMAC_KEY`, NOT by `JWT_SECRET` via `hashToken`. These receipts are the
+ * one row designed to outlive the account, and they are matched by recomputing the digest,
+ * so a rotatable key would make every historical receipt unmatchable the first time
+ * `JWT_SECRET` changed — and the lookup would return no rows rather than an error.
+ */
 function fingerprint(value: string): string {
-  return hashToken(value);
+  return receiptFingerprint(value);
 }
 
 /** Failure notes must never carry a token, even accidentally, and stay short. */

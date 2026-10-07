@@ -20,7 +20,7 @@ vi.mock("../../src/services/gmail/oauth.service", async (importOriginal) => {
 import { createApp } from "../../src/app";
 import { prisma } from "../../src/config/prisma";
 import { redis } from "../../src/config/redis";
-import { hashPassword, hashToken, randomToken } from "../../src/utils/crypto";
+import { hashPassword, hashToken, randomToken, receiptFingerprint } from "../../src/utils/crypto";
 import { loginUser } from "../../src/services/auth/auth.service";
 import {
   ObliterateUserAccountService,
@@ -672,7 +672,7 @@ describeIntegration("account deletion", () => {
       let receiptsForThisUserDuringPhase1 = -1;
       mockDisconnectGmail.mockImplementation(async () => {
         receiptsForThisUserDuringPhase1 = await prisma.accountDeletionRecord.count({
-          where: { deletedUserIdHash: hashToken(account.userId) },
+          where: { deletedUserIdHash: receiptFingerprint(account.userId) },
         });
         return { revoked: true };
       });
@@ -689,7 +689,7 @@ describeIntegration("account deletion", () => {
 
       // …and written exactly once by the end.
       const forThisUser = await prisma.accountDeletionRecord.count({
-        where: { deletedUserIdHash: hashToken(account.userId) },
+        where: { deletedUserIdHash: receiptFingerprint(account.userId) },
       });
       expect(forThisUser).toBe(1);
 
@@ -726,10 +726,17 @@ describeIntegration("account deletion", () => {
       expect(serialised).not.toMatch(/mailops_(at|rt|csrf)/);
 
       // The stored values are fingerprints, not the raw identifiers.
-      expect(receipt.deletedUserIdHash).toBe(hashToken(account.userId));
+      expect(receipt.deletedUserIdHash).toBe(receiptFingerprint(account.userId));
       expect(receipt.deletedUserIdHash).not.toBe(account.userId);
-      expect(receipt.requestedByIpHash).toBe(hashToken(ip));
+      expect(receipt.requestedByIpHash).toBe(receiptFingerprint(ip));
       expect(receipt.requestedByIpHash).not.toBe(ip);
+
+      // Key separation on the real write path: the receipt must NOT be fingerprinted with
+      // the rotatable JWT_SECRET-keyed helper, which is what made historical receipts
+      // unmatchable after a secret rotation.
+      expect(receipt.deletedUserIdHash).not.toBe(hashToken(account.userId));
+      expect(receipt.requestedByIpHash).not.toBe(hashToken(ip));
+      expect(receipt.deletedUserIdHash).toMatch(/^v1\.[0-9a-f]{64}$/);
     });
 
     it("survives the deletion it describes", async () => {
@@ -755,7 +762,7 @@ describeIntegration("account deletion", () => {
       // `deletedUserIdHash` is indexed but deliberately not unique: the same user id
       // can only be deleted once, but the column is a fingerprint rather than a key.
       const found = await prisma.accountDeletionRecord.findFirst({
-        where: { deletedUserIdHash: hashToken(account.userId) },
+        where: { deletedUserIdHash: receiptFingerprint(account.userId) },
       });
       expect(found?.id).toBe(result.receiptId);
     });

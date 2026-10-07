@@ -65,6 +65,7 @@ Production **validates and refuses to start** on insecure configuration
 ```
 JWT_SECRET      must be present and ≥ 32 characters
 ENCRYPTION_KEY  must be present (32 bytes, base64)
+RECEIPT_HMAC_KEY must be present (≥ 32 bytes) — keys the deletion-receipt fingerprints
 COOKIE_SECURE   must be true
 ```
 
@@ -89,6 +90,14 @@ COOKIE_DOMAIN=.mailops.example.com     # only if web and api share a parent doma
 
 # openssl rand -base64 32  → 32 bytes for AES-256-GCM
 ENCRYPTION_KEY=<32-byte base64>
+
+# openssl rand -base64 32  → keys the permanent account-deletion receipt fingerprints.
+# Must NOT be the same value as JWT_SECRET or ENCRYPTION_KEY: these receipts are matched by
+# recomputing the HMAC, so a rotatable key would make every historical receipt unmatchable.
+# There is no fallback — production refuses to start without it. See SECURITY.md §4.
+RECEIPT_HMAC_KEY=<32-byte base64>
+# Only during a two-phase rotation of the above; remove once no receipt needs the old key.
+# RECEIPT_HMAC_KEY_PREVIOUS=<the outgoing value>
 
 GOOGLE_CLIENT_ID=<from Google Cloud>
 GOOGLE_CLIENT_SECRET=<from Google Cloud>
@@ -363,6 +372,7 @@ and not only in Redis.
 | PostgreSQL | `pg_dump -Fc` daily + WAL archiving for PITR | 30 days minimum |
 | `ENCRYPTION_KEY` | secret manager + offline escrow | indefinite |
 | `JWT_SECRET` | secret manager | indefinite |
+| `RECEIPT_HMAC_KEY` | secret manager + offline escrow | indefinite — a deletion receipt cannot be re-derived without the original key, so losing it makes every receipt unverifiable |
 | Redis | not backed up deliberately | — |
 
 Redis holds only transport state. BullMQ delayed escalation jobs are mirrored by
@@ -435,8 +445,9 @@ UPDATE "UserSettings" SET "voiceEnabled" = false, "notifyVoice" = false;
 
 ## 13. Security checklist before going live
 
-- [ ] `JWT_SECRET` and `ENCRYPTION_KEY` generated randomly and stored in a secret manager
+- [ ] `JWT_SECRET`, `ENCRYPTION_KEY` and `RECEIPT_HMAC_KEY` generated randomly and stored in a secret manager
 - [ ] `ENCRYPTION_KEY` backed up separately from the database
+- [ ] `RECEIPT_HMAC_KEY` set to its **own** value (not `JWT_SECRET`, not `ENCRYPTION_KEY`) and escrowed — deletion receipts cannot be matched without it
 - [ ] `COOKIE_SECURE=true`, HTTPS enforced end to end
 - [ ] `NODE_ENV=production` (enables CSP, HSTS, generic error messages)
 - [ ] `WEB_BASE_URL` set correctly (drives the CORS allow-list and notification links)

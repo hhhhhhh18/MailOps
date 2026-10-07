@@ -53,6 +53,31 @@ const envSchema = z.object({
 
   ENCRYPTION_KEY: z.string().default(""),
 
+  /**
+   * HMAC key for the permanent account-deletion receipt fingerprints
+   * (`AccountDeletionRecord.deletedUserIdHash` / `requestedByIpHash`).
+   *
+   * Deliberately its own key rather than `JWT_SECRET`. Those receipts are permanent and are
+   * matched by *recomputing* the digest, so keying them on a secret that is expected to be
+   * rotated — and that also signs access tokens and fingerprints refresh/reset/verification
+   * tokens — would make every historical receipt unmatchable the first time it changed, and
+   * a silent "no rows" result would read as "this account was never deleted".
+   *
+   * There is no fallback, not even in development. A dev fallback derived from another
+   * secret would reintroduce exactly the coupling this key exists to remove, so a missing
+   * key is an explicit failure: it refuses to boot in production, and it throws on use
+   * everywhere else.
+   *
+   * Same parsing rules as `ENCRYPTION_KEY`: base64 when it looks base64, otherwise utf8,
+   * and at least 32 bytes of key material.
+   */
+  RECEIPT_HMAC_KEY: z.string().optional(),
+  /**
+   * The outgoing `RECEIPT_HMAC_KEY` during a two-phase rotation. Verification only —
+   * never used to write new receipts.
+   */
+  RECEIPT_HMAC_KEY_PREVIOUS: z.string().optional(),
+
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_OAUTH_REDIRECT_URI: z.string().default("http://localhost:4000/api/gmail/oauth/callback"),
@@ -129,6 +154,9 @@ function loadEnv(): AppEnv {
     const weak: string[] = [];
     if (!process.env.JWT_SECRET || env.JWT_SECRET.length < 32) weak.push("JWT_SECRET (min 32 chars)");
     if (!process.env.ENCRYPTION_KEY) weak.push("ENCRYPTION_KEY");
+    // Required so deletion receipts are never keyed by something rotatable. See the
+    // RECEIPT_HMAC_KEY comment above for why there is no fallback.
+    if (!process.env.RECEIPT_HMAC_KEY) weak.push("RECEIPT_HMAC_KEY");
     if (!env.COOKIE_SECURE) weak.push("COOKIE_SECURE=true");
     if (weak.length) {
       throw new Error(`Refusing to start in production with insecure config: ${weak.join(", ")}`);

@@ -248,7 +248,10 @@ occasionally content-adjacent details inside `summary`/`metadata`.
 1. **Delete all `AuditLog` rows for the user** via the existing cascade. They are user-scoped, they contain the user's
    `ip`/`userAgent`, and their main audience (the in-app "what MailOps did" view) ceases to exist when the account does.
 2. **Write one `AccountDeletionRecord` row *before* the delete** — in a new table with **no FK to `User`**: `id`,
-   `deletedUserIdHash` (HMAC of the id, so it is not a re-identifier but is matchable against a support ticket),
+    `deletedUserIdHash` (HMAC-SHA256 of the id, so it is not a re-identifier but is matchable against a support ticket),
+    **keyed by `RECEIPT_HMAC_KEY`, not `JWT_SECRET`** — the original design reused the JWT secret through `hashToken`,
+    which made every historical receipt unmatchable the first time that secret was rotated (F5). The stored form is
+    now `v1.<64 hex>`; see SECURITY.md §4,
    `requestedAt`, `completedAt`, `initiator` (`USER` | `ADMIN`), `emailDomainHash` or nothing, `countsByModel` JSON,
    `gmailGrantRevoked` bool, `revokeFailures` JSON, `requestedByIpHash`. This is the accountability artifact and it is
    genuinely de-identified.
@@ -451,6 +454,9 @@ Do **not** accept a target user id from the client. Do **not** add a `keepApplic
 **Receipt**
 - `AccountDeletionRecord` written exactly once, **before** deletion, containing no raw email, no `ip`, no token; the
   hashed id is not reversible but matches a recomputation.
+- The hash is keyed by the dedicated `RECEIPT_HMAC_KEY` (`v1.<64 hex>`) so that rotating `JWT_SECRET` cannot silently
+  invalidate matching. Receipts written before this change are bare hex under the old `JWT_SECRET` scheme and are
+  **not** rewritten; see SECURITY.md §4 for how they are matched.
 
 ---
 

@@ -219,6 +219,10 @@ node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 
 # AES-256-GCM encryption key for OAuth tokens and integration secrets (32 bytes, base64)
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+
+# Deletion-receipt HMAC key (32 bytes, base64) — must be a different value from the two
+# above. Kept stable on purpose: deletion receipts are matched by recomputing the HMAC.
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
 
 Put them in `backend/.env`:
@@ -226,6 +230,7 @@ Put them in `backend/.env`:
 ```ini
 JWT_SECRET=<first value>
 ENCRYPTION_KEY=<second value>
+RECEIPT_HMAC_KEY=<third value>
 ```
 
 Everything else in `backend/.env.example` works with local defaults, except the
@@ -459,7 +464,8 @@ Short version:
 ```bash
 export NODE_ENV=production
 # required in production: JWT_SECRET (32+ chars), ENCRYPTION_KEY (32 bytes),
-# COOKIE_SECURE=true, DATABASE_URL, REDIS_URL   — the process refuses to boot otherwise
+# RECEIPT_HMAC_KEY (32 bytes, its own value), COOKIE_SECURE=true, DATABASE_URL,
+# REDIS_URL   — the process refuses to boot otherwise
 
 cd backend
 npm ci
@@ -485,6 +491,8 @@ starting half-configured. The most important variables:
 | `REDIS_URL` | `redis://localhost:6379` | BullMQ transport |
 | `JWT_SECRET` | dev fallback | access-token signing; **required** in production |
 | `ENCRYPTION_KEY` | dev fallback | AES-256-GCM key for stored credentials |
+| `RECEIPT_HMAC_KEY` | **none** | HMAC key for deletion-receipt fingerprints; **required** in production, and unlike the two above it has *no* dev fallback on purpose. Keep it stable — rotating it makes existing receipts unmatchable |
+| `RECEIPT_HMAC_KEY_PREVIOUS` | — | outgoing `RECEIPT_HMAC_KEY` during a two-phase rotation (verification only) |
 | `COOKIE_SECURE` | `false` | must be `true` in production |
 | `GOOGLE_CLIENT_ID` / `_SECRET` | — | enables the Gmail connect flow |
 | `AI_PROVIDER` | `heuristic` | `heuristic` or `openai-compatible` |

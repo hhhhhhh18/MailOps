@@ -135,6 +135,53 @@ with a fresh random 12-byte IV per record.
 
 Rotating the key requires re-encryption. See DATABASE.md §8.
 
+### Account-deletion receipt fingerprints
+
+`AccountDeletionRecord.deletedUserIdHash` and `.requestedByIpHash` are HMAC-SHA256
+fingerprints of the deleted user id and the requesting IP. They are the only rows that
+survive an account deletion, and they are matched by **recomputing** the digest from an
+identifier — so their key must never be rotated as routine hygiene.
+
+- **Key:** `RECEIPT_HMAC_KEY` — deliberately its own secret, not `JWT_SECRET` and not
+  `ENCRYPTION_KEY`. **Format:** `v1.<64 lowercase hex>`; the prefix exists so a future key
+  change is *detectable* rather than silent.
+- **Why not `JWT_SECRET`.** That secret is expected to be rotated, and it also signs access
+  tokens and fingerprints refresh / password-reset / email-verification token rows. Keying a
+  *permanent* record with it meant the first rotation made every historical receipt
+  unmatchable — and because the lookup simply returns no rows, the failure looked like
+  "this account was never deleted" instead of like an error.
+- **No fallback, in any environment.** A missing `RECEIPT_HMAC_KEY` refuses to boot in
+  production (`config/env.ts`) and throws on use everywhere else. A development fallback
+  derived from another secret would reintroduce exactly the coupling the key removes.
+- **Verification:** `matchesReceiptFingerprint(stored, value)` is timing-safe and also
+  accepts a digest written under `RECEIPT_HMAC_KEY_PREVIOUS`, which is what makes a
+  two-phase rotation possible. It intentionally does **not** re-derive a `JWT_SECRET` hash,
+  so the rotatable key stays off the verification path.
+
+**Rotating `RECEIPT_HMAC_KEY`:**
+
+1. Set `RECEIPT_HMAC_KEY_PREVIOUS` to the outgoing value and roll out the new
+   `RECEIPT_HMAC_KEY`. Receipts written under either key now verify.
+2. Once nothing needs the old key, remove `RECEIPT_HMAC_KEY_PREVIOUS`.
+
+A receipt whose key is no longer supplied is unverifiable **permanently** — an HMAC cannot
+be re-derived without the original key. Escrow and back this key up alongside
+`ENCRYPTION_KEY` (see DEPLOYMENT.md §11) and treat rotation as a deliberate migration, not
+maintenance.
+
+**Legacy records (pre-F5).** Receipts written before the `v1.` prefix existed are **bare
+64-character hex** produced by the old `JWT_SECRET`-keyed scheme. They are **not**
+automatically rewritten: re-hashing them would require the original `JWT_SECRET`, and
+rewriting the artifact that proves an erasure happened is worse than leaving it honest. To
+match one, compute `HMAC-SHA256(JWT_SECRET_at_the_time, identifier)` out of band with that
+original secret. If `JWT_SECRET` has already been rotated, a legacy receipt can no longer be
+matched at all — that is precisely the defect this change fixes, and it is not retroactively
+recoverable.
+
+`hashToken()` is unchanged: it still keys refresh, password-reset and email-verification
+token rows with `JWT_SECRET`, where invalidating outstanding tokens on rotation is the
+intended behaviour.
+
 ---
 
 ## 5. Authentication and sessions
@@ -348,3 +395,8 @@ Stated plainly rather than implied:
    the channel the user chose.
 7. **No SOC 2 / ISO 27001 posture.** The controls above are engineering controls;
    they are not an audit.
+8. **Legacy deletion receipts are only conditionally matchable.** Receipts written before
+   the receipt key was separated from `JWT_SECRET` are bare hex and depend on the original
+   `JWT_SECRET`. They are not rewritten. If that secret has already been rotated in an
+   environment, those receipts can never be matched again — no code change can repair it.
+   Receipts written from this release onward carry a `v1.` prefix and their own key.

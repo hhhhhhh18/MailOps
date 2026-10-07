@@ -33,6 +33,9 @@ process.env.AI_PROVIDER = "heuristic";
 process.env.AI_API_KEY = "";
 process.env.JWT_SECRET = "test-only-jwt-secret-not-used-anywhere-real";
 process.env.ENCRYPTION_KEY = crypto.randomBytes(32).toString("base64");
+// The deletion-receipt HMAC key. Separate from JWT_SECRET on purpose and with no fallback,
+// so tests must provide it explicitly — exactly like production (see config/env.ts).
+process.env.RECEIPT_HMAC_KEY = crypto.randomBytes(32).toString("base64");
 process.env.COOKIE_SECURE = "false";
 process.env.SCHEDULER_ENABLED = "false";
 process.env.GMAIL_SYNC_LOOKBACK_DAYS = "60";
