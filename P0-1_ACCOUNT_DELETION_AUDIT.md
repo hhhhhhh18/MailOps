@@ -5,6 +5,9 @@
 cleanup service, audit service, queue registry, all 6 workers, notification dispatcher/channels, Gmail OAuth service,
 settings controller/routes, frontend Settings privacy surface.
 **Date:** 2026-09-26
+**Revised:** 2026-10-07 — §1.2 table row and new §1.3 corrected for the F4 Redis OAuth-state migration; the
+OAuth-state erasure gap reclassified from a P0-1 follow-up to **P2 under R7**. Documentation only: no application
+code, schema or configuration was changed.
 
 ---
 
@@ -29,6 +32,10 @@ ordering constraint that silently fails if you get it wrong:
 4. **The `voice:calls:{userId}:{date}` Redis key embeds the userId in the key name.**
 5. **`AuditLog` is the one genuine policy decision** (Section 6) — it is the only table where "delete everything" and
    "retain for security/legal reasons" pull in opposite directions.
+
+**Deliberately not in that list of five:** the Gmail OAuth `state` keys (§1.3) are a *bounded* erasure-completeness
+residue rather than a structural gap — the value is a pseudonymous id, the TTL is enforced by Redis at 600 s, and no
+identifier is in the key. It is tracked as **P2 under R7 (Residual PII in Redis)**, not as a P0-1 follow-up.
 
 **Recommendation: Option C — DB cascades for the bulk erasure, wrapped in an explicit orchestration service for the
 pre-flight (revoke + count), the post-flight (Redis), and the receipt.** Detailed reasoning in Section 7. The decisive
@@ -81,10 +88,59 @@ Section 12 — adding payments later introduces records that legally **cannot** 
 | Redis — completed/failed job bodies | retained per `removeOnComplete/removeOnFail` | **yes** | ❌ no |
 | Redis — `voice:calls:{userId}:{YYYY-MM-DD}` | call counter, **userId in the key** | **yes** | ❌ no |
 | Redis — `scheduler:daily:{date}` | daily-job guard | no | n/a |
-| Redis — in-memory OAuth `pendingStates` | `{ userId, nonce, createdAt }` in a module-level `Map` | **yes** | ❌ no (ephemeral, TTL-bounded, per-process) |
+| Redis — OAuth state `oauth:state:{nonce}` | value is the **raw `userId`**; 600 s TTL, set at write time | **yes** (pseudonymous id) | ❌ no — see §1.3 |
 | Application logs | redacted via `redactSecrets`; `ip`/`userAgent`/`userId` appear in structured logs | **partly** | ❌ no |
 | External providers | Google grant, Slack channel, Meta, Twilio, AI provider | **yes** | ❌ no |
 | Backups | none implemented yet (P0-10) | — | ❌ n/a today, **⚠️ future** |
+
+### 1.3 Gmail OAuth `state` — current reality after F4, and its erasure status
+
+**Superseded finding.** This audit originally recorded the OAuth `state` store as an in-process, module-level `Map`
+(`pendingStates`, holding `{ userId, nonce, createdAt }`). That is **no longer accurate**. F4 moved the store to Redis
+so a consent callback can land on any API instance and survive a restart mid-flow.
+
+**Current implementation** (`backend/src/services/gmail/oauth-state.store.ts`):
+
+| Property | Value |
+|---|---|
+| Key | `oauth:state:{nonce}` — the nonce is 24 CSPRNG bytes rendered base64url, i.e. **pure random** |
+| Value | the **raw `userId`** (a Prisma cuid) — nothing else; no email, no IP, no timestamp |
+| Identifier in the key? | **No.** The keyspace does not leak account identifiers the way `voice:calls:{userId}:{date}` does |
+| TTL | **600 s**, set with `EX` at write time and enforced by Redis itself — not by a sweep that only runs when some other user starts a flow |
+| Single-use | Yes — consumed through one Lua script performing `GET` then `DEL` in a single round trip |
+| Purged by account deletion? | **No.** Not explicitly. The deletion flow's Redis purge only patterns on `voice:calls:{userId}:*` |
+
+**Why this is P2-class residue, not a P0-1 defect.** Each point is grounded in the code:
+
+1. **The value is a pseudonymous identifier.** It is a bare cuid. Because every FK-bearing table cascades, once the
+   `User` row is gone the id resolves to nothing — it degrades to a dangling opaque value.
+2. **The TTL is 600 s and Redis-enforced.** Maximum residue is one scalar id, in one random-keyed entry, for ten minutes.
+3. **The key contains no user identifier**, so the keyspace is not enumerable by user.
+4. **No `userId → nonce` reverse index exists** — and no datastore persists the nonce (there is no `state`/`nonce`
+   column anywhere in `schema.prisma`). The only ownership information in existence is the value inside each key. This is
+   the constraint that shapes the remediation below.
+5. **FK protection prevents an orphaned `GmailAccount`.** A callback arriving after the row is deleted still consumes the
+   state, but the subsequent `GmailAccount.upsert` fails on the `User` FK, so no row can be created. The flow fails
+   safely (ugly — a constraint violation surfacing as a generic failure — but safe).
+6. **F4's atomic `GET`+`DEL` prevents replay/double-consumption**, and a purge cannot weaken it: both operations are
+   single atomic commands against the same key, so the only possible orderings are "purge first → clean
+   `invalid or already used`" or "consume first → purge is a no-op". No torn read, no double-spend, no resurrected
+   state.
+7. **Therefore this is residual erasure *completeness*, not a new data-integrity or security failure.** Nothing is
+   orphaned, nothing is replayed, nothing is exposed. The only consequence is that the database has reduced the user id
+   to an HMAC in the receipt while Redis still holds the raw id for up to ten minutes.
+
+**Future recommended remediation — NOT implemented.** Add a purge to the existing Phase-3 Redis flow that:
+
+- iterates `SCAN oauth:state:*` (the non-blocking equivalent of the `keys()` call already used for `voice:calls`), and
+- `DEL`etes only keys whose **value equals the deleting `userId`** (value-equality filtering is what makes it
+  provably impossible to touch another user's state), and
+- folds the removed count into the existing `redisKeysRemoved` counter so the deletion receipt shape is unchanged.
+
+**This requires an approved, additive change to the F4-owned `oauth-state.store.ts`** (either the purge helper itself, or
+exporting the key prefix so the prefix is not re-declared elsewhere). That change is **deliberately out of scope here** —
+this section is documentation-only and records the requirement without acting on it. It must not be implemented without
+that explicit approval, and it must not be attempted as part of an unrelated change.
 
 ---
 
@@ -197,7 +253,7 @@ Payload-bearing PII queues: the first four. The last two carry only opaque ids (
 | **Notification delivery after deletion** | ✅ **Safe by construction** | `dispatchNotification()` returns an empty no-op outcome when the `Notification` row is missing (`dispatcher.service.ts:36`). Same for escalation: `sweepOverdueEscalations()` queries `Notification` rows. **This queue is already deletion-safe.** |
 | **Access to deleted credentials** | ⚠️ **Ordering-dependent** | If revocation happens before the delete, in-flight jobs hold a dead token and fail cleanly. If a job already decrypted a token into memory, it may complete once. Revoking first shrinks the window to milliseconds. |
 | **Cleanup acting on the user's real Gmail after erasure** | 🔴 **Genuine side-effect risk** | `enqueueCleanup({ userId, batchId, emailIds })` calls the Gmail API to archive/trash messages. A queued or delayed cleanup job could **modify the user's mailbox after they asked for erasure**. This is the one job that produces an externally visible effect, and it is not prevented by the FK argument. Revoking the grant first is what stops it. |
-| **Residual PII in Redis** | 🔴 **Yes** | Payloads for the four PII queues, plus retained completed/failed job bodies (`removeOnComplete: {count:500}`, `removeOnFail: {count:1000}`), plus `voice:calls:{userId}:{date}` with the userId **in the key name**. |
+| **Residual PII in Redis** | 🔴 **Yes** | Payloads for the four PII queues, plus retained completed/failed job bodies (`removeOnComplete: {count:500}`, `removeOnFail: {count:1000}`), plus `voice:calls:{userId}:{date}` with the userId **in the key name**. Separately, the F4 OAuth-state keys (`oauth:state:{nonce}` → raw `userId`) are **not** purged — a much milder, TTL-bounded residue; see §1.3 and R7. |
 | **`obliterateUserJobs()` is inadequate** | 🔴 | `queues/index.ts:189` removes only `email:${emailId}` on the `emailProcessing` queue. It misses (a) the `:${Date.now()}` suffix used for forced reprocessing, (b) all five other queues, (c) completed/failed bodies, (d) the voice counter. Its docstring ("delete my MailOps data") also overstates what it does. |
 
 ### Recommended job safety measures
@@ -208,6 +264,8 @@ Payload-bearing PII queues: the first four. The last two carry only opaque ids (
    (`getJobs`/`getWaiting`/`getDelayed`/`getFailed`/`getCompleted`) and remove those whose payload matches the userId;
    plus `queue.clean(0, N, "completed"|"failed")` for retained bodies. Never rely on reconstructing a job id.
 3. **Delete the `voice:calls:*` keys** for the user.
+   *(The F4 OAuth-state keys are deliberately **not** part of this list — they need no pattern and are a separate,
+   TTL-bounded P2 item; see §1.3 and R7.)*
 4. **Defence in depth in the workers themselves** — have the PII-bearing processors re-assert that the `User` still
    exists at the top of the handler and return early if not. The FK guarantee is real but produces noisy error logs and
    pointless retries for a deleted account, and it does not cover work that has no DB write (e.g. the Slack/voice send).
@@ -317,6 +375,7 @@ Phase 3 — OUTSIDE-POSTGRES CLEANUP (idempotent, best-effort, retryable)
   • purge queue jobs by userId (4 PII queues) + retained completed/failed bodies
   • delete voice:calls:{userId}:* keys
   • log the outcome (redacted) and, on partial failure, flag for the retry sweep
+  ✗ NOT covered: OAuth state keys (oauth:state:{nonce}) — see §1.3 / R7 (P2)
 
 Phase 4 — RESPONSE
   • clear auth cookies (access + refresh + csrf)
@@ -470,7 +529,7 @@ Do **not** accept a target user id from the client. Do **not** add a `keepApplic
 | R4 | **AI-provider-side retention is outside MailOps' control** | 🟠 | No provider deletion API is integrated. Whether prompts/responses are retained, and for how long, is **unknown** and depends on vendor terms — verify before making any claim about AI data |
 | R5 | **`metadata` / `audit` / `extracted` JSON columns are opaque** | 🟠 | `AuditLog.metadata`, `Notification.metadata`, `ApplicationEvent.metadata`, `CleanupAction.audit`, `EmailAnalysis.extracted` may hold content-adjacent PII beyond what the columns name. A manual sample review is needed before asserting "complete" erasure |
 | R6 | **The Gmail cleanup side-effect window** | 🟠 | A queued cleanup job can modify the user's real mailbox. Revoking first shrinks but does not formally eliminate the window; a worker-side existence re-check is the durable fix |
-| R7 | **Residual PII in Redis** | 🟠 | Job payloads + retained completed/failed bodies + `voice:calls:{userId}:*`. Requires Phase 3 to be implemented, and it is best-effort/retryable, not transactional |
+| R7 | **Residual PII in Redis** | 🟠 | Job payloads + retained completed/failed bodies + `voice:calls:{userId}:*`. Requires Phase 3 to be implemented, and it is best-effort/retryable, not transactional. **Also covers `oauth:state:{nonce}` → raw `userId` (F4), reclassified from a P0-1 follow-up to a P2 item under this risk** (§1.3): 600 s Redis-enforced TTL, random key containing no identifier, no `userId → nonce` reverse index, FK-safe, and replay already closed by F4's atomic `GET`+`DEL` — so this is erasure *completeness*, not a data-integrity or security failure. Future fix = `SCAN` + value-equality purge from the existing Redis flow, requiring an approved additive change to the F4-owned `oauth-state.store.ts` |
 | R8 | **`obliterateUserJobs()` is misleading and incomplete** | 🟡 | Retire or fix it; a future caller trusting its name would leave data behind |
 | R9 | **No admin/support deletion path** | 🟡 | There is no role model in the schema. A user who loses access to their email cannot have their account deleted by support today |
 | R10 | **`optionalAuth` trusts JWTs without a DB check** | 🟡 | Dead code today; becomes a hole the moment it is used on a user-scoped route |
@@ -491,3 +550,8 @@ post-deletion redirect with cache clearing.
 **Tests:** per-model zero-row erasure assertions (16 tables), a DMMF-driven drift guard, revocation **ordering**,
 Redis/job cleanup, receipt integrity, session invalidation, and the security/validation set.
 **Non-negotiable ordering:** revoke external grants → write the receipt → delete the user row → clean Redis.
+
+**Deliberately excluded from the above (P2, R7):** explicitly erasing the F4 OAuth-state keys
+(`oauth:state:{nonce}` → raw `userId`). Documented in §1.3. Deferred as a separate change because the recommended fix
+needs an approved additive edit to the F4-owned `oauth-state.store.ts`, and because the residue is TTL-bounded at
+600 s rather than unbounded.
