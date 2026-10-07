@@ -295,7 +295,7 @@ of what the client sends.
 |---|---|---|
 | `GET` | `/api/analytics/overview?weeks=12` | Totals, funnel, rates, timings, per-company/per-role breakdowns, weekly + monthly activity series, inbox composition, cleanup impact, notification stats, `responseTimeByCompany` |
 | `GET` | `/api/dashboard` | One call for the morning view: greeting, headline, summary, counters, scan schedule, cleanup summary, notification counts + recent, `attention[]` (ordered by the decision engine), recent applications, important emails, upcoming deadlines, 7-day activity |
-| `GET` | `/api/dashboard/system` | Queue depth and availability, plus a `degraded` flag |
+| `GET` | `/api/dashboard/system` | Queue names with depth (`waiting`/`active`/`delayed`/`failed`/`completed`) plus an `available` flag per queue, and a `degraded` flag. Allow-listed fields only — never infrastructure error text |
 
 `attention[]` items carry `kind` (`ACTION_REQUIRED` \| `DEADLINE` \|
 `IMPORTANT_UPDATE` \| `REJECTION` \| `REVIEW` \| `SYNC_PROBLEM`), `severity`,

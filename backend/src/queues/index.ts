@@ -146,9 +146,19 @@ export interface QueueHealth {
   failed: number;
   completed: number;
   available: boolean;
-  error?: string;
 }
 
+/**
+ * Per-queue depth plus reachability, for operator monitoring.
+ *
+ * There is deliberately **no error field**. A queue failure used to inline the raw
+ * BullMQ/ioredis `error.message` into the result, which then travelled to clients inside a
+ * successful 200 response — bypassing the connection-error sanitization in
+ * `middleware/error.ts`, which only sees *thrown* errors. Those messages embed host, port
+ * and auth semantics (`connect ECONNREFUSED 10.4.2.9:6379 (NOAUTH Authentication
+ * required)`), i.e. exactly the reconnaissance that is most useful to an attacker during
+ * an outage. `available: false` is all a caller needs; the detail goes to the logs.
+ */
 export async function getQueueHealth(): Promise<QueueHealth[]> {
   const results: QueueHealth[] = [];
   for (const [name, queue] of registry) {
@@ -164,6 +174,9 @@ export async function getQueueHealth(): Promise<QueueHealth[]> {
         available: true,
       });
     } catch (error) {
+      // The diagnostic stays server-side, where it is useful for operators and invisible
+      // to callers. Never put it in the returned object — see the note above.
+      logger.warn({ queue: name, err: describeError(error).message }, "queue health probe failed");
       results.push({
         name,
         waiting: 0,
@@ -172,7 +185,6 @@ export async function getQueueHealth(): Promise<QueueHealth[]> {
         failed: 0,
         completed: 0,
         available: false,
-        error: (error as Error).message,
       });
     }
   }

@@ -36,11 +36,26 @@ export async function dashboard(req: Request, res: Response) {
 /**
  * Operational health for the scan panel: queue depth + datastore reachability.
  * Deliberately non-throwing so a Redis outage still renders the dashboard.
+ *
+ * Reachable by any authenticated account, so the payload is an explicit allow-list rather
+ * than a pass-through of `QueueHealth`. Queue names and counters are kept because they are
+ * the documented operator monitoring signal (DEPLOYMENT.md §10 — `email-processing` depth,
+ * escalation delayed count), but anything else must be added here deliberately: a field
+ * added upstream must not reach a client by default. This is belt-and-braces alongside
+ * `getQueueHealth()`, which no longer returns any infrastructure error text at all.
  */
 export async function systemStatus(_req: Request, res: Response) {
   const queueHealth = await getQueueHealth().catch(() => []);
   return ok(res, {
-    queues: queueHealth,
+    queues: queueHealth.map((queue) => ({
+      name: queue.name,
+      waiting: queue.waiting,
+      active: queue.active,
+      delayed: queue.delayed,
+      failed: queue.failed,
+      completed: queue.completed,
+      available: queue.available,
+    })),
     queueAvailable: queueHealth.some((q) => q.available),
     degraded: queueHealth.length > 0 && queueHealth.every((q) => !q.available),
   });
