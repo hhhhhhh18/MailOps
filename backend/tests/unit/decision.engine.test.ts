@@ -246,36 +246,37 @@ describe("voice gates", () => {
   );
 
   /**
-   * checkVoiceGate evaluates quiet hours against the real clock — correct for
-   * production, but it means a hard-coded window makes this assertion pass or fail
-   * depending on the time of day the suite runs. The windows are therefore derived
-   * from the current hour, which exercises both directions deterministically.
+   * Use an explicit instant so the quiet-hours gate is deterministic and
+   * independent of the wall clock when the test suite runs.
    */
   it("allows a call outside quiet hours and blocks it inside them", async () => {
-    const hour = new Date().getUTCHours();
-
-    // A window starting two hours from now cannot contain the current hour.
     const open = await checkVoiceGate(
       "user_1",
       {
         ...baseSettings,
-        voiceQuietHoursStart: (hour + 2) % 24,
-        voiceQuietHoursEnd: (hour + 4) % 24,
-        // Raised so a stray counter value can never affect this assertion.
+        voiceQuietHoursStart: 22,
+        voiceQuietHoursEnd: 7,
         voiceMaxCallsPerDay: 5,
       },
       "UTC",
       eligiblePlan,
+      new Date("2026-10-07T12:00:00.000Z"),
     );
+
     expect(open.allowed).toBe(true);
 
-    // A window anchored on the current hour must contain it.
     const closed = await checkVoiceGate(
       "user_1",
-      { ...baseSettings, voiceQuietHoursStart: hour, voiceQuietHoursEnd: (hour + 2) % 24 },
+      {
+        ...baseSettings,
+        voiceQuietHoursStart: 22,
+        voiceQuietHoursEnd: 7,
+      },
       "UTC",
       eligiblePlan,
+      new Date("2026-10-07T23:00:00.000Z"),
     );
+
     expect(closed.allowed).toBe(false);
     expect(closed.reason).toMatch(/quiet hours/i);
   });

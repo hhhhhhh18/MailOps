@@ -4,6 +4,7 @@ import express, {
   type Express,
   type RequestHandler,
 } from "express";
+import crypto from "node:crypto";
 import request from "supertest";
 
 /**
@@ -40,7 +41,8 @@ const ORIGINAL_GLOBAL_MAX = process.env.RATE_LIMIT_MAX;
 /** Small enough to assert an exact boundary quickly. The two must differ. */
 const AUTH_MAX = 3;
 const GLOBAL_MAX = 9;
-
+const TEST_RATE_LIMIT_PREFIX = `rl:test:email-verification:${crypto.randomUUID()}`;
+process.env.RATE_LIMIT_KEY_PREFIX = TEST_RATE_LIMIT_PREFIX;
 let app: Express;
 let probeApp: Express;
 let errorHandler: ErrorRequestHandler;

@@ -33,7 +33,7 @@ const DMMF_MODELS = Prisma.dmmf.datamodel.models;
 
 /** (table, column) → ON DELETE rule, read from the migration history. */
 function foreignKeyRules(): Map<string, string> {
-  const dir = path.resolve(process.cwd(), "prisma", "migrations");
+  const dir = path.resolve(__dirname, "../../prisma/migrations");
   const sql = readdirSync(dir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .flatMap((entry) =>
@@ -183,7 +183,7 @@ describe("account deletion: schema coverage", () => {
   });
 
   it("keeps the receipt migration additive and free of destructive statements", () => {
-    const dir = path.resolve(process.cwd(), "prisma", "migrations");
+    const dir = path.resolve(__dirname, "../../prisma/migrations");
     const receiptMigration = readdirSync(dir, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && entry.name.includes("account_deletion"))
       .map((entry) => path.join(dir, entry.name, "migration.sql"))

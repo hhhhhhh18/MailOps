@@ -374,6 +374,7 @@ export async function checkVoiceGate(
   } | null,
   timezone: string,
   plan: NotificationPlan,
+  now = new Date(),
 ): Promise<VoiceGate> {
   if (!settings?.voiceEnabled) {
     return { allowed: false, reason: "Voice escalation is disabled for this account." };
@@ -384,7 +385,12 @@ export async function checkVoiceGate(
   if (plan.voiceEventKey && !settings.voiceCriticalEvents.includes(plan.voiceEventKey)) {
     return { allowed: false, reason: `Calls for ${plan.voiceEventKey} events are switched off.` };
   }
-  if (isWithinQuietHours(new Date(), timezone, settings.voiceQuietHoursStart, settings.voiceQuietHoursEnd)) {
+  if (isWithinQuietHours(
+  now,
+  timezone,
+  settings.voiceQuietHoursStart,
+  settings.voiceQuietHoursEnd,
+)) {
     return {
       allowed: false,
       reason: `Within quiet hours (${settings.voiceQuietHoursStart}:00–${settings.voiceQuietHoursEnd}:00 ${timezone}).`,
