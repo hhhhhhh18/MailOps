@@ -3,8 +3,13 @@
 import { Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { ArrowRight, CheckCircle2, MailWarning, TimerOff } from "lucide-react";
-import { Button, Card, InlineAlert, Skeleton } from "@/components/ui/primitives";
+import { ArrowRight, CheckCircle2, MailWarning } from "lucide-react";
+import {
+  Button,
+  Card,
+  InlineAlert,
+  Skeleton,
+} from "@/components/ui/primitives";
 import { useVerifyEmail } from "@/lib/hooks";
 import { ApiError } from "@/lib/api";
 import type { EmailVerificationStatus } from "@/lib/types";
@@ -19,8 +24,11 @@ import type { EmailVerificationStatus } from "@/lib/types";
  */
 function statusFromError(error: unknown): EmailVerificationStatus {
   if (error instanceof ApiError) {
-    const details = error.details as { status?: EmailVerificationStatus } | undefined;
-    if (details?.status === "EXPIRED" || details?.status === "INVALID") return details.status;
+    const details = error.details as
+      | { status?: EmailVerificationStatus }
+      | undefined;
+    if (details?.status === "EXPIRED" || details?.status === "INVALID")
+      return details.status;
   }
   return "INVALID";
 }
@@ -34,8 +42,8 @@ function VerifyEmailResult() {
     return (
       <Card>
         <InlineAlert tone="critical" title="This link is incomplete">
-          The verification link is missing its token. Open the button inside the email MailOps sent
-          you, or request a new link from Settings.
+          The verification link is missing its token. Open the button inside the
+          email MailOps sent you, or request a new link from Settings.
         </InlineAlert>
         <BackLinks />
       </Card>
@@ -53,7 +61,8 @@ function VerifyEmailResult() {
     );
   }
 
-  const status: EmailVerificationStatus = data?.status ?? (error ? statusFromError(error) : "INVALID");
+  const status: EmailVerificationStatus =
+    data?.status ?? (error ? statusFromError(error) : "INVALID");
 
   if (status === "VERIFIED" || status === "ALREADY_VERIFIED") {
     return (
@@ -63,7 +72,9 @@ function VerifyEmailResult() {
             <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[color:var(--tone-success)]" />
             <div className="text-xs text-secondary">
               <p className="font-medium text-[color:var(--content-primary)]">
-                {status === "VERIFIED" ? "Your email address is verified" : "This address is already verified"}
+                {status === "VERIFIED"
+                  ? "Your email address is verified"
+                  : "This address is already verified"}
               </p>
               <p className="mt-1">
                 {status === "VERIFIED"
@@ -86,8 +97,8 @@ function VerifyEmailResult() {
     return (
       <Card>
         <InlineAlert tone="critical" title="This verification link has expired">
-          Verification links are time-limited. Sign in and use “Resend verification email” — we will
-          send a fresh link to the same address.
+          Verification links are time-limited. Sign in and use “Resend
+          verification email” — we will send a fresh link to the same address.
         </InlineAlert>
         <BackLinks />
       </Card>
@@ -97,8 +108,8 @@ function VerifyEmailResult() {
   return (
     <Card>
       <InlineAlert tone="critical" title="This verification link is not valid">
-        The link may have been altered or truncated by your email client. Sign in and resend the
-        verification email to get a working link.
+        The link may have been altered or truncated by your email client. Sign
+        in and resend the verification email to get a working link.
       </InlineAlert>
       <BackLinks />
     </Card>
@@ -108,11 +119,17 @@ function VerifyEmailResult() {
 function BackLinks() {
   return (
     <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
-      <Link href="/login" className="inline-flex items-center gap-1.5 text-secondary hover:text-[color:var(--content-primary)]">
+      <Link
+        href="/login"
+        className="inline-flex items-center gap-1.5 text-secondary hover:text-[color:var(--content-primary)]"
+      >
         Go to sign in
       </Link>
       <span className="text-muted">·</span>
-      <Link href="/forgot-password" className="inline-flex items-center gap-1.5 text-secondary hover:text-[color:var(--content-primary)]">
+      <Link
+        href="/forgot-password"
+        className="inline-flex items-center gap-1.5 text-secondary hover:text-[color:var(--content-primary)]"
+      >
         Reset your password instead
       </Link>
     </div>
@@ -127,7 +144,9 @@ export default function VerifyEmailPage() {
           <span className="flex h-10 w-10 items-center justify-center rounded-card border border-[color:var(--surface-border)] bg-[color:var(--surface-raised)]">
             <MailWarning className="h-4 w-4 text-[color:var(--tone-info)]" />
           </span>
-          <h1 className="mt-3 text-lg font-semibold tracking-tight">Email verification</h1>
+          <h1 className="mt-3 text-lg font-semibold tracking-tight">
+            Email verification
+          </h1>
         </div>
 
         {/* useSearchParams must sit inside a Suspense boundary for prerendering. */}

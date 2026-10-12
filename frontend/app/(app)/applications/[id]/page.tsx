@@ -13,19 +13,38 @@ import {
   MessageSquarePlus,
   User,
 } from "lucide-react";
-import { Badge, Button, Card, EmptyState, InlineAlert, Input, Select, Skeleton, Textarea } from "@/components/ui/primitives";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  InlineAlert,
+  Input,
+  Select,
+  Skeleton,
+  Textarea,
+} from "@/components/ui/primitives";
 import { ConfirmDialog, Modal, useToast } from "@/components/ui/feedback";
 import { KeyValue } from "@/components/ui/data";
-import { ConfidenceMeter, DuplicateBadge, StatusBadge, SubCategoryBadge } from "@/components/domain/badges";
+import {
+  ConfidenceMeter,
+  DuplicateBadge,
+  StatusBadge,
+  SubCategoryBadge,
+} from "@/components/domain/badges";
 import { ApplicationTimeline } from "@/components/domain/timeline";
 import {
   useAddApplicationNote,
   useApplication,
   useDuplicateDecision,
   useOverrideApplicationStatus,
-  useUpdateApplication,
 } from "@/lib/hooks";
-import { STATUS_LABELS, formatDate, formatDateTime, formatRelative } from "@/lib/utils";
+import {
+  STATUS_LABELS,
+  formatDate,
+  formatDateTime,
+  formatRelative,
+} from "@/lib/utils";
 import type { ApplicationStatus } from "@/lib/types";
 
 /**
@@ -41,9 +60,14 @@ export default function ApplicationDetailPage() {
   const applicationId = params?.id ?? null;
   const toast = useToast();
 
-  const { data: application, isLoading, isError, error } = useApplication(applicationId);
+  const {
+    data: application,
+    isLoading,
+    isError,
+    error,
+  } = useApplication(applicationId);
   const overrideStatus = useOverrideApplicationStatus();
-  const updateApplication = useUpdateApplication();
+
   const addNote = useAddApplicationNote();
   const duplicateDecision = useDuplicateDecision();
 
@@ -73,7 +97,11 @@ export default function ApplicationDetailPage() {
       <Card>
         <EmptyState
           title="Application not found"
-          description={error instanceof Error ? error.message : "This application may have been removed."}
+          description={
+            error instanceof Error
+              ? error.message
+              : "This application may have been removed."
+          }
           action={
             <Link href="/applications">
               <Button size="sm" variant="secondary">
@@ -86,12 +114,19 @@ export default function ApplicationDetailPage() {
     );
   }
 
-  const duplicateEvent = application.events.find((event) => event.type === "DUPLICATE_FLAGGED");
-  const previousId = (duplicateEvent?.metadata as { previousApplicationId?: string })?.previousApplicationId;
+  const duplicateEvent = application.events.find(
+    (event) => event.type === "DUPLICATE_FLAGGED",
+  );
+  const previousId = (
+    duplicateEvent?.metadata as { previousApplicationId?: string }
+  )?.previousApplicationId;
 
   return (
     <div className="space-y-4">
-      <Link href="/applications" className="inline-flex items-center gap-1.5 text-xs text-muted hover:text-[color:var(--content-primary)]">
+      <Link
+        href="/applications"
+        className="inline-flex items-center gap-1.5 text-xs text-muted hover:text-[color:var(--content-primary)]"
+      >
         <ArrowLeft className="h-3.5 w-3.5" /> All applications
       </Link>
 
@@ -100,9 +135,15 @@ export default function ApplicationDetailPage() {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-lg font-semibold tracking-tight">{application.company}</h1>
+              <h1 className="text-lg font-semibold tracking-tight">
+                {application.company}
+              </h1>
               <StatusBadge status={application.status} />
-              {application.applicationRefId && <Badge tone="neutral">Emp ref {application.applicationRefId}</Badge>}
+              {application.applicationRefId && (
+                <Badge tone="neutral">
+                  Emp ref {application.applicationRefId}
+                </Badge>
+              )}
               {application.isDemo && <Badge tone="neutral">Demo</Badge>}
               {application.needsReview && <DuplicateBadge />}
             </div>
@@ -114,19 +155,39 @@ export default function ApplicationDetailPage() {
                   <MapPin className="h-3 w-3" /> {application.location}
                 </span>
               )}
-              {application.employmentType && <span>{application.employmentType}</span>}
-              {application.jobId && <span className="font-mono">{application.jobId}</span>}
+              {application.employmentType && (
+                <span>{application.employmentType}</span>
+              )}
+              {application.jobId && (
+                <span className="font-mono">{application.jobId}</span>
+              )}
               <span>Applied {formatDate(application.appliedDate)}</span>
-              <span>Last updated {formatRelative(application.lastUpdated)}</span>
-              {application.confidence !== null && <ConfidenceMeter confidence={application.confidence} />}
+              <span>
+                Last updated {formatRelative(application.lastUpdated)}
+              </span>
+              {application.confidence !== null && (
+                <ConfidenceMeter confidence={application.confidence} />
+              )}
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="secondary" onClick={() => { setNewStatus(application.status); setShowStatusEditor(true); }}>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                setNewStatus(application.status);
+                setShowStatusEditor(true);
+              }}
+            >
               Update status
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => setShowNoteEditor(true)} icon={<MessageSquarePlus className="h-3.5 w-3.5" />}>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setShowNoteEditor(true)}
+              icon={<MessageSquarePlus className="h-3.5 w-3.5" />}
+            >
               Add note
             </Button>
             {(application.applicationUrl || application.jobUrl) && (
@@ -148,14 +209,21 @@ export default function ApplicationDetailPage() {
               tone="waiting"
               title="Possible duplicate application"
               action={
-                <Button size="sm" variant="secondary" onClick={() => setDuplicatePromptOpen(true)}>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setDuplicatePromptOpen(true)}
+                >
                   Resolve
                 </Button>
               }
             >
               {duplicateEvent.description}
               {previousId && (
-                <Link href={`/applications/${previousId}`} className="ml-1 underline">
+                <Link
+                  href={`/applications/${previousId}`}
+                  className="ml-1 underline"
+                >
                   View previous application
                 </Link>
               )}
@@ -163,12 +231,21 @@ export default function ApplicationDetailPage() {
           </div>
         )}
 
-        {application.notes && <p className="mt-4 rounded-lg bg-[color:var(--surface-overlay)] p-3 text-xs text-secondary">{application.notes}</p>}
+        {application.notes && (
+          <p className="mt-4 rounded-lg bg-[color:var(--surface-overlay)] p-3 text-xs text-secondary">
+            {application.notes}
+          </p>
+        )}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
         {/* ---- Timeline ---- */}
-        <Card className="lg:col-span-2" flush title="Timeline" description="Every status change is recorded as an immutable event">
+        <Card
+          className="lg:col-span-2"
+          flush
+          title="Timeline"
+          description="Every status change is recorded as an immutable event"
+        >
           <ApplicationTimeline events={application.events} />
         </Card>
 
@@ -179,12 +256,20 @@ export default function ApplicationDetailPage() {
               <KeyValue label="Company">{application.company}</KeyValue>
               <KeyValue label="Role">{application.role}</KeyValue>
               <KeyValue label="Job ID">{application.jobId ?? "—"}</KeyValue>
-              <KeyValue label="Location">{application.location ?? "—"}</KeyValue>
-              <KeyValue label="Employment">{application.employmentType ?? "—"}</KeyValue>
+              <KeyValue label="Location">
+                {application.location ?? "—"}
+              </KeyValue>
+              <KeyValue label="Employment">
+                {application.employmentType ?? "—"}
+              </KeyValue>
               <KeyValue label="Salary">{application.salary ?? "—"}</KeyValue>
               <KeyValue label="Source">{application.source ?? "—"}</KeyValue>
-              <KeyValue label="Applied">{formatDate(application.appliedDate)}</KeyValue>
-              <KeyValue label="Status since">{formatDateTime(application.statusChangedAt)}</KeyValue>
+              <KeyValue label="Applied">
+                {formatDate(application.appliedDate)}
+              </KeyValue>
+              <KeyValue label="Status since">
+                {formatDateTime(application.statusChangedAt)}
+              </KeyValue>
             </dl>
           </Card>
 
@@ -193,39 +278,60 @@ export default function ApplicationDetailPage() {
               <div className="space-y-1.5 text-xs">
                 {application.recruiterName && (
                   <p className="inline-flex items-center gap-1.5">
-                    <User className="h-3 w-3 text-muted" /> {application.recruiterName}
+                    <User className="h-3 w-3 text-muted" />{" "}
+                    {application.recruiterName}
                   </p>
                 )}
                 {application.recruiterEmail && (
                   <p className="inline-flex items-center gap-1.5">
-                    <Mail className="h-3 w-3 text-muted" /> {application.recruiterEmail}
+                    <Mail className="h-3 w-3 text-muted" />{" "}
+                    {application.recruiterEmail}
                   </p>
                 )}
               </div>
             ) : (
-              <p className="text-xs text-muted">No recruiter contact was stated in the emails MailOps has seen.</p>
+              <p className="text-xs text-muted">
+                No recruiter contact was stated in the emails MailOps has seen.
+              </p>
             )}
           </Card>
 
           <Card title={`Related emails (${application.emails.length})`} flush>
             {!application.emails.length ? (
-              <EmptyState icon={<Building2 className="h-6 w-6" />} title="No linked emails yet" />
+              <EmptyState
+                icon={<Building2 className="h-6 w-6" />}
+                title="No linked emails yet"
+              />
             ) : (
               <ul className="divide-y divide-[color:var(--surface-border)]">
                 {application.emails.map((email) => (
                   <li key={email.id}>
-                    <Link href={`/emails?emailId=${email.id}`} className="block px-4 py-2.5 hover:bg-[color:var(--surface-hover)]">
+                    <Link
+                      href={`/emails?emailId=${email.id}`}
+                      className="block px-4 py-2.5 hover:bg-[color:var(--surface-hover)]"
+                    >
                       <p className="truncate text-xs font-medium">
-                        {email.deletedFromGmail && <span className="mr-1 text-muted">[deleted from Gmail]</span>}
+                        {email.deletedFromGmail && (
+                          <span className="mr-1 text-muted">
+                            [deleted from Gmail]
+                          </span>
+                        )}
                         {email.subject ?? "(no subject)"}
                       </p>
                       <p className="truncate text-2xs text-muted">
-                        {email.fromName ?? email.fromEmail} · {formatRelative(email.receivedAt)}
+                        {email.fromName ?? email.fromEmail} ·{" "}
+                        {formatRelative(email.receivedAt)}
                       </p>
                       {email.analysis && (
                         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                          {email.analysis.subCategory && <SubCategoryBadge subCategory={email.analysis.subCategory} />}
-                          <ConfidenceMeter confidence={email.analysis.confidence} />
+                          {email.analysis.subCategory && (
+                            <SubCategoryBadge
+                              subCategory={email.analysis.subCategory}
+                            />
+                          )}
+                          <ConfidenceMeter
+                            confidence={email.analysis.confidence}
+                          />
                         </div>
                       )}
                     </Link>
@@ -235,16 +341,25 @@ export default function ApplicationDetailPage() {
             )}
           </Card>
 
-          <Card title={`Notifications (${application.notifications.length})`} flush>
+          <Card
+            title={`Notifications (${application.notifications.length})`}
+            flush
+          >
             {!application.notifications.length ? (
-              <EmptyState icon={<CalendarClock className="h-6 w-6" />} title="No notifications for this application" />
+              <EmptyState
+                icon={<CalendarClock className="h-6 w-6" />}
+                title="No notifications for this application"
+              />
             ) : (
               <ul className="divide-y divide-[color:var(--surface-border)]">
                 {application.notifications.map((notification) => (
                   <li key={notification.id} className="px-4 py-2.5">
-                    <p className="truncate text-xs font-medium">{notification.title}</p>
+                    <p className="truncate text-xs font-medium">
+                      {notification.title}
+                    </p>
                     <p className="mt-0.5 text-2xs text-muted">
-                      {notification.status.toLowerCase()} · {formatRelative(notification.createdAt)}
+                      {notification.status.toLowerCase()} ·{" "}
+                      {formatRelative(notification.createdAt)}
                     </p>
                   </li>
                 ))}
@@ -270,12 +385,19 @@ export default function ApplicationDetailPage() {
               loading={overrideStatus.isPending}
               onClick={() =>
                 overrideStatus.mutate(
-                  { id: application.id, status: newStatus, note: statusNote || undefined },
+                  {
+                    id: application.id,
+                    status: newStatus,
+                    note: statusNote || undefined,
+                  },
                   {
                     onSuccess: () => {
                       setShowStatusEditor(false);
                       setStatusNote("");
-                      toast.success("Status updated", `Set to ${STATUS_LABELS[newStatus]}.`);
+                      toast.success(
+                        "Status updated",
+                        `Set to ${STATUS_LABELS[newStatus]}.`,
+                      );
                     },
                   },
                 )
@@ -287,7 +409,13 @@ export default function ApplicationDetailPage() {
         }
       >
         <div className="space-y-3">
-          <Select label="Status" value={newStatus} onChange={(event) => setNewStatus(event.target.value as ApplicationStatus)}>
+          <Select
+            label="Status"
+            value={newStatus}
+            onChange={(event) =>
+              setNewStatus(event.target.value as ApplicationStatus)
+            }
+          >
             {Object.entries(STATUS_LABELS).map(([value, label]) => (
               <option key={value} value={value}>
                 {label}
@@ -320,7 +448,13 @@ export default function ApplicationDetailPage() {
               disabled={!note.trim()}
               onClick={() =>
                 addNote.mutate(
-                  { id: application.id, note: note.trim(), dueAt: noteDue ? new Date(noteDue).toISOString() : undefined },
+                  {
+                    id: application.id,
+                    note: note.trim(),
+                    dueAt: noteDue
+                      ? new Date(noteDue).toISOString()
+                      : undefined,
+                  },
                   {
                     onSuccess: () => {
                       setShowNoteEditor(false);
@@ -338,7 +472,12 @@ export default function ApplicationDetailPage() {
         }
       >
         <div className="space-y-3">
-          <Textarea label="Note" value={note} onChange={(event) => setNote(event.target.value)} placeholder="Follow up with the recruiter…" />
+          <Textarea
+            label="Note"
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            placeholder="Follow up with the recruiter…"
+          />
           <Input
             label="Due date (optional)"
             type="date"
@@ -359,8 +498,13 @@ export default function ApplicationDetailPage() {
             {
               onSuccess: () => {
                 setDuplicatePromptOpen(false);
-                toast.success("Merged", "The duplicate record was merged into the earlier application.");
-                router.push(previousId ? `/applications/${previousId}` : "/applications");
+                toast.success(
+                  "Merged",
+                  "The duplicate record was merged into the earlier application.",
+                );
+                router.push(
+                  previousId ? `/applications/${previousId}` : "/applications",
+                );
               },
             },
           )
@@ -372,9 +516,10 @@ export default function ApplicationDetailPage() {
         cancelLabel="Keep both"
         description={
           <p>
-            MailOps found a similar earlier application. Merging moves every email, event and notification onto the earlier
-            record and removes this one. Choosing <span className="font-medium">Keep both</span> leaves them separate and marks
-            this one as reviewed.
+            MailOps found a similar earlier application. Merging moves every
+            email, event and notification onto the earlier record and removes
+            this one. Choosing <span className="font-medium">Keep both</span>{" "}
+            leaves them separate and marks this one as reviewed.
           </p>
         }
       />

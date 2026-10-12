@@ -1,10 +1,25 @@
 "use client";
 
 import Link from "next/link";
-import { BellOff, Check, ExternalLink, Pause, Play, RefreshCw, Volume2 } from "lucide-react";
-import { Badge, Button, Card, EmptyState, InlineAlert, Skeleton } from "@/components/ui/primitives";
+import {
+  BellOff,
+  Check,
+  ExternalLink,
+  Pause,
+  Play,
+  RefreshCw,
+  Volume2,
+} from "lucide-react";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  InlineAlert,
+  Skeleton,
+} from "@/components/ui/primitives";
 import { Pagination } from "@/components/ui/data";
-import { Modal } from "@/components/ui/feedback";
+
 import { ChannelChip, SeverityBadge } from "./badges";
 import {
   useAcknowledgeNotification,
@@ -14,7 +29,11 @@ import {
   useRetryNotification,
 } from "@/lib/hooks";
 import { CHANNEL_LABELS, cn, formatRelative, truncate } from "@/lib/utils";
-import type { EscalationPlan, NotificationAttempt, NotificationRecord } from "@/lib/types";
+import type {
+  EscalationPlan,
+  NotificationAttempt,
+  NotificationRecord,
+} from "@/lib/types";
 
 /**
  * Notifications feed + escalation explainer (spec #14, #15).
@@ -25,22 +44,42 @@ import type { EscalationPlan, NotificationAttempt, NotificationRecord } from "@/
  * allowed to do about it.
  */
 
-export function NotificationsView({ page, onPageChange }: { page: number; onPageChange: (page: number) => void }) {
-  const { data, isLoading, isError, error, refetch } = useNotifications({ page, pageSize: 20 });
+export function NotificationsView({
+  page,
+  onPageChange,
+}: {
+  page: number;
+  onPageChange: (page: number) => void;
+}) {
+  const { data, isLoading, isError, error, refetch } = useNotifications({
+    page,
+    pageSize: 20,
+  });
   const { data: counts } = useNotificationCounts();
 
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-3">
         <SummaryTile label="Open" value={counts?.unread ?? 0} tone="info" />
-        <SummaryTile label="Awaiting acknowledgement" value={counts?.pendingAck ?? 0} tone="waiting" />
-        <SummaryTile label="Escalated in 24h" value={counts?.escalatedToday ?? 0} tone="critical" />
+        <SummaryTile
+          label="Awaiting acknowledgement"
+          value={counts?.pendingAck ?? 0}
+          tone="waiting"
+        />
+        <SummaryTile
+          label="Escalated in 24h"
+          value={counts?.escalatedToday ?? 0}
+          tone="critical"
+        />
       </div>
 
       {(counts?.pendingAck ?? 0) > 0 && (
-        <InlineAlert tone="waiting" title="Escalation is armed on these notifications">
-          MailOps will move to the next channel you enabled if a notification stays unacknowledged. Acknowledging stops the
-          ladder immediately.
+        <InlineAlert
+          tone="waiting"
+          title="Escalation is armed on these notifications"
+        >
+          MailOps will move to the next channel you enabled if a notification
+          stays unacknowledged. Acknowledging stops the ladder immediately.
         </InlineAlert>
       )}
 
@@ -73,7 +112,10 @@ export function NotificationsView({ page, onPageChange }: { page: number; onPage
       ) : (
         <div className="space-y-2">
           {data.items.map((notification) => (
-            <NotificationRow key={notification.id} notification={notification} />
+            <NotificationRow
+              key={notification.id}
+              notification={notification}
+            />
           ))}
         </div>
       )}
@@ -83,7 +125,15 @@ export function NotificationsView({ page, onPageChange }: { page: number; onPage
   );
 }
 
-function SummaryTile({ label, value, tone }: { label: string; value: number; tone: "info" | "waiting" | "critical" }) {
+function SummaryTile({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "info" | "waiting" | "critical";
+}) {
   return (
     <div className="surface-card px-4 py-3">
       <p className="text-2xs uppercase tracking-wide text-muted">{label}</p>
@@ -101,20 +151,28 @@ function SummaryTile({ label, value, tone }: { label: string; value: number; ton
   );
 }
 
-export function NotificationRow({ notification }: { notification: NotificationRecord }) {
+export function NotificationRow({
+  notification,
+}: {
+  notification: NotificationRecord;
+}) {
   const acknowledge = useAcknowledgeNotification();
   const pause = usePauseEscalation();
   const retry = useRetryNotification();
 
   const plan = notification.metadata?.plan as EscalationPlan | undefined;
   const attempts = notification.attempts ?? [];
-  const settled = ["ACKNOWLEDGED", "RESOLVED", "CANCELLED"].includes(notification.status);
+  const settled = ["ACKNOWLEDGED", "RESOLVED", "CANCELLED"].includes(
+    notification.status,
+  );
 
   return (
     <Card
       className={cn(
         "px-0",
-        notification.severity === "CRITICAL" && !settled && "ring-1 ring-inset ring-[color:var(--tone-critical)]/30",
+        notification.severity === "CRITICAL" &&
+          !settled &&
+          "ring-1 ring-inset ring-[color:var(--tone-critical)]/30",
       )}
       bodyClassName="p-4"
       flush
@@ -123,24 +181,40 @@ export function NotificationRow({ notification }: { notification: NotificationRe
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <SeverityBadge severity={notification.severity} />
-            <Badge tone="neutral">{notification.type.toLowerCase().replace(/_/g, " ")}</Badge>
-            {notification.requiresAck && !settled && <Badge tone="waiting">Awaiting acknowledgement</Badge>}
+            <Badge tone="neutral">
+              {notification.type.toLowerCase().replace(/_/g, " ")}
+            </Badge>
+            {notification.requiresAck && !settled && (
+              <Badge tone="waiting">Awaiting acknowledgement</Badge>
+            )}
             {notification.acknowledgedAt && (
               <Badge tone="success">
                 <Check className="h-3 w-3" /> Acknowledged
               </Badge>
             )}
-            {notification.escalationPaused && !settled && <Badge tone="neutral">Escalation paused</Badge>}
+            {notification.escalationPaused && !settled && (
+              <Badge tone="neutral">Escalation paused</Badge>
+            )}
           </div>
 
-          <p className="mt-2 text-sm font-medium text-[color:var(--content-primary)]">{notification.title}</p>
-          {notification.body && <p className="mt-1 whitespace-pre-line text-xs text-secondary">{notification.body}</p>}
+          <p className="mt-2 text-sm font-medium text-[color:var(--content-primary)]">
+            {notification.title}
+          </p>
+          {notification.body && (
+            <p className="mt-1 whitespace-pre-line text-xs text-secondary">
+              {notification.body}
+            </p>
+          )}
 
           <div className="mt-2 flex flex-wrap items-center gap-3 text-2xs text-muted">
             <span>{formatRelative(notification.createdAt)}</span>
             {notification.application && (
-              <Link href={`/applications/${notification.application.id}`} className="hover:underline">
-                {notification.application.company} — {notification.application.role}
+              <Link
+                href={`/applications/${notification.application.id}`}
+                className="hover:underline"
+              >
+                {notification.application.company} —{" "}
+                {notification.application.role}
               </Link>
             )}
             {notification.nextEscalationAt && !settled && (
@@ -157,15 +231,30 @@ export function NotificationRow({ notification }: { notification: NotificationRe
                 .slice()
                 .reverse()
                 .map((attempt) => (
-                  <span key={attempt.id} className="inline-flex items-center gap-1">
-                    <ChannelChip channel={attempt.channel} sent={attempt.status === "SENT"} />
-                    <span className="text-2xs text-muted">{attempt.stage === -1 ? "initial" : `stage ${attempt.stage + 1}`}</span>
+                  <span
+                    key={attempt.id}
+                    className="inline-flex items-center gap-1"
+                  >
+                    <ChannelChip
+                      channel={attempt.channel}
+                      sent={attempt.status === "SENT"}
+                    />
+                    <span className="text-2xs text-muted">
+                      {attempt.stage === -1
+                        ? "initial"
+                        : `stage ${attempt.stage + 1}`}
+                    </span>
                   </span>
                 ))}
             </div>
           )}
 
-          {plan && !settled && <EscalationLadder plan={plan} currentStage={notification.escalationStage} />}
+          {plan && !settled && (
+            <EscalationLadder
+              plan={plan}
+              currentStage={notification.escalationStage}
+            />
+          )}
         </div>
 
         <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -183,15 +272,34 @@ export function NotificationRow({ notification }: { notification: NotificationRe
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => pause.mutate({ id: notification.id, paused: !notification.escalationPaused })}
+              onClick={() =>
+                pause.mutate({
+                  id: notification.id,
+                  paused: !notification.escalationPaused,
+                })
+              }
               loading={pause.isPending}
-              title={notification.escalationPaused ? "Resume escalation" : "Pause escalation"}
+              title={
+                notification.escalationPaused
+                  ? "Resume escalation"
+                  : "Pause escalation"
+              }
             >
-              {notification.escalationPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+              {notification.escalationPaused ? (
+                <Play className="h-3.5 w-3.5" />
+              ) : (
+                <Pause className="h-3.5 w-3.5" />
+              )}
             </Button>
           )}
           {attempts.some((attempt) => attempt.status === "FAILED") && (
-            <Button size="sm" variant="ghost" onClick={() => retry.mutate(notification.id)} loading={retry.isPending} title="Retry delivery">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => retry.mutate(notification.id)}
+              loading={retry.isPending}
+              title="Retry delivery"
+            >
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
           )}
@@ -200,7 +308,8 @@ export function NotificationRow({ notification }: { notification: NotificationRe
               href={notification.actionUrl}
               className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[color:var(--surface-border)] bg-[color:var(--surface-overlay)] px-3 text-xs font-medium transition-colors hover:bg-[color:var(--surface-hover)]"
             >
-              {notification.actionLabel ?? "Open"} <ExternalLink className="h-3 w-3" />
+              {notification.actionLabel ?? "Open"}{" "}
+              <ExternalLink className="h-3 w-3" />
             </Link>
           )}
         </div>
@@ -213,10 +322,18 @@ export function NotificationRow({ notification }: { notification: NotificationRe
  * Visualises the ladder. Disabled stages are shown greyed with the reason, so
  * "why didn't MailOps call me?" is answerable without reading documentation.
  */
-function EscalationLadder({ plan, currentStage }: { plan: EscalationPlan; currentStage: number }) {
+function EscalationLadder({
+  plan,
+  currentStage,
+}: {
+  plan: EscalationPlan;
+  currentStage: number;
+}) {
   return (
     <div className="mt-3 rounded-lg border border-[color:var(--surface-border)] bg-[color:var(--surface-base)] px-3 py-2.5">
-      <p className="text-2xs uppercase tracking-wide text-muted">Escalation ladder</p>
+      <p className="text-2xs uppercase tracking-wide text-muted">
+        Escalation ladder
+      </p>
 
       <ol className="mt-2 flex flex-wrap items-center gap-2 text-2xs">
         <Stage label="MailOps" active={currentStage === -1} done />
@@ -226,12 +343,15 @@ function EscalationLadder({ plan, currentStage }: { plan: EscalationPlan; curren
             <span
               className={cn(
                 "rounded-full px-2 py-0.5",
-                index === currentStage ? "bg-[color:var(--tone-waiting)]/15 text-[color:var(--tone-waiting)]" : "text-muted",
+                index === currentStage
+                  ? "bg-[color:var(--tone-waiting)]/15 text-[color:var(--tone-waiting)]"
+                  : "text-muted",
                 index < currentStage && "text-[color:var(--tone-success)]",
               )}
             >
               {CHANNEL_LABELS[stage] ?? stage}
-              {plan.escalation.delaysMinutes[index] !== undefined && ` (+${plan.escalation.delaysMinutes[index]}m)`}
+              {plan.escalation.delaysMinutes[index] !== undefined &&
+                ` (+${plan.escalation.delaysMinutes[index]}m)`}
             </span>
           </li>
         ))}
@@ -246,19 +366,29 @@ function EscalationLadder({ plan, currentStage }: { plan: EscalationPlan; curren
 
       {plan.escalation.stages.length === 0 && (
         <p className="mt-2 text-2xs text-muted">
-          No escalation channels are enabled. MailOps will only show this in the dashboard.
+          No escalation channels are enabled. MailOps will only show this in the
+          dashboard.
         </p>
       )}
     </div>
   );
 }
 
-function Stage({ label, active, done }: { label: string; active?: boolean; done?: boolean }) {
+function Stage({
+  label,
+  active,
+  done,
+}: {
+  label: string;
+  active?: boolean;
+  done?: boolean;
+}) {
   return (
     <li
       className={cn(
         "rounded-full px-2 py-0.5",
-        active && "bg-[color:var(--tone-info)]/15 text-[color:var(--tone-info)]",
+        active &&
+          "bg-[color:var(--tone-info)]/15 text-[color:var(--tone-info)]",
         done && !active && "text-[color:var(--tone-success)]",
       )}
     >
@@ -268,9 +398,17 @@ function Stage({ label, active, done }: { label: string; active?: boolean; done?
 }
 
 /** Compact notification list for the dashboard sidebar. */
-export function NotificationMiniList({ items }: { items: NotificationRecord[] | undefined }) {
+export function NotificationMiniList({
+  items,
+}: {
+  items: NotificationRecord[] | undefined;
+}) {
   if (!items?.length) {
-    return <p className="px-4 py-6 text-center text-xs text-muted">Nothing new. MailOps is watching your inbox.</p>;
+    return (
+      <p className="px-4 py-6 text-center text-xs text-muted">
+        Nothing new. MailOps is watching your inbox.
+      </p>
+    );
   }
 
   return (
@@ -280,8 +418,12 @@ export function NotificationMiniList({ items }: { items: NotificationRecord[] | 
           <div className="flex items-start gap-2">
             <SeverityBadge severity={notification.severity} />
             <div className="min-w-0">
-              <p className="truncate text-xs text-[color:var(--content-primary)]">{truncate(notification.title, 80)}</p>
-              <p className="text-2xs text-muted">{formatRelative(notification.createdAt)}</p>
+              <p className="truncate text-xs text-[color:var(--content-primary)]">
+                {truncate(notification.title, 80)}
+              </p>
+              <p className="text-2xs text-muted">
+                {formatRelative(notification.createdAt)}
+              </p>
             </div>
           </div>
         </li>
